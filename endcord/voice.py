@@ -14,6 +14,7 @@ import threading
 import time
 import urllib
 import urllib.parse
+from collections import deque
 
 import av
 import dave
@@ -73,6 +74,8 @@ def init_microphone(custom_mic):
     try:
         if not custom_mic:
             return soundcard.default_microphone()
+        if custom_mic == "OFF":
+            return False
         try:
             return soundcard.get_microphone(custom_mic)
         except IndexError:
@@ -144,7 +147,7 @@ class Gateway():
         self.known_user_ids.add(str(my_id))   # fix_davey - uses int ids everywhere
         self.ssrc_cache = set()
 
-        self.enable_input = volume_input > 0
+        self.enable_input = volume_input >= 0
         self.volume_input = volume_input if self.enable_input else 0
         self.volume_output = volume_output
         self.custom_mic = custom_mic
@@ -217,7 +220,7 @@ class Gateway():
                 self.selected_mode,
                 self.volume_input,
                 self.volume_output,
-                custom_mic=self.custom_mic,
+                custom_mic=(self.custom_mic if self.enable_input else "OFF"),
                 silence=self.silence_threshold,
             )
             self.voice_handler.start()
@@ -673,6 +676,22 @@ class Gateway():
         self.voice_handler.live_mic_switch(new_mic)
 
 
+    def play_audio_file(self, path, block=False, mix=False):
+        """Play audio file from specified path. If mic is ON then mix sounds"""
+        if not self.enable_input:
+            return
+        if block:
+            self.voice_handler.audio_file_player(path, mix)
+        else:
+            threading.Thread(target=self.voice_handler.audio_file_player, args=(path, mix), daemon=True).start()
+
+
+    def stop_file_playback(self):
+        """Stop playback of all audio files"""
+        self.voice_handler.stop_file_playback()
+
+
+
 class VoiceHandler:
     """Voice call sound receiver, transmitter, player and recorder"""
 
@@ -689,8 +708,10 @@ class VoiceHandler:
         self.ssrc_to_userid = {}
         self.encryptor = dave.Encryptor()
 
-        self.audio_queue_out = queue.Queue(maxsize=10)   # 0.2s buffer
+        self.audio_queue_out = {}
+        self.audio_queue_out_lock = threading.Lock()
         self.audio_queue_in = queue.Queue(maxsize=25)   # 0.5s buffer
+        self.audio_thread_rec = None
 
         self.opus_decoder = av.codec.CodecContext.create("opus", "r")
         self.opus_encoder = av.codec.CodecContext.create("opus", "w")
@@ -711,6 +732,8 @@ class VoiceHandler:
 
         self.run = False
         self.recording = False
+        self.pause_mic = False
+        self.playing = False
         self.rtp_sequence = random.randint(0, 0xFFFF)   # must be random per rfc3550
         self.rtp_timestamp = random.randint(0, 0xFFFFFFFF)
         self.transport_counter = 0
@@ -739,9 +762,10 @@ class VoiceHandler:
             self.audio_thread_play.start()
 
             # start transmitter and recorder
-            if self.microphone and self.gateway.enable_input:
+            if self.gateway.enable_input:
                 self.transmitter_thread = threading.Thread(target=self.transmitter_loop, daemon=True)
                 self.transmitter_thread.start()
+            if self.microphone:
                 self.audio_thread_rec = threading.Thread(target=self.audio_recorder, args=(48000, 2), daemon=True)
                 self.audio_thread_rec.start()
 
@@ -759,8 +783,6 @@ class VoiceHandler:
         if not self.run:
             return
         self.run = False
-        self.audio_queue_out.put(None)
-        self.audio_queue_in.put(None)
         try:
             self.udp.close()
         except Exception:
@@ -775,19 +797,17 @@ class VoiceHandler:
 
     def live_mic_switch(self, new_mic):
         """Change microphone while in the stream"""
-        if not self.microphone:
-            return
-        if not self.audio_thread_rec:
-            return
         new_mic_obj = init_microphone(new_mic)
-        if not new_mic_obj:
+        if new_mic_obj is None:
             return
         self.recording = False
-        self.audio_thread_rec.join()
+        if self.audio_thread_rec:
+            self.audio_thread_rec.join()
         self.recording = True
         self.microphone = new_mic_obj
-        self.audio_thread_rec = threading.Thread(target=self.audio_recorder, args=(48000, 2), daemon=True)
-        self.audio_thread_rec.start()
+        if new_mic_obj:
+            self.audio_thread_rec = threading.Thread(target=self.audio_recorder, args=(48000, 2), daemon=True)
+            self.audio_thread_rec.start()
 
 
     def update_ratchets(self, session):
@@ -909,8 +929,10 @@ class VoiceHandler:
             try:
                 av_packet = av.packet.Packet(payload)
                 frames = self.opus_decoder.decode(av_packet)
-                for frame in frames:
-                    self.audio_queue_out.put(frame)
+                with self.audio_queue_out_lock:
+                    buf = self.audio_queue_out.setdefault(ssrc, deque(maxlen=20))
+                    for frame in frames:
+                        buf.append(frame)
             except Exception as e:
                 logger.error(f"PyAV opus decoding failed. Error: {e}")
 
@@ -949,7 +971,7 @@ class VoiceHandler:
             next_send_time += 0.02   # 20ms = 960 samples
 
             # silence detection
-            if not payload and self.silence_threshold and detect_silence(audio_data, threshold=self.silence_threshold):
+            if (not payload and self.silence_threshold and detect_silence(audio_data, threshold=self.silence_threshold)) or payload == OPUS_SILENCE:
                 if silence_counter > max_silence_packets:
                     # if speaking:   # seems theres no need to send
                     #     self.gateway.send_speaking()
@@ -1028,35 +1050,6 @@ class VoiceHandler:
             self.bytes_sent += opus_payload_size
 
         self.gateway.disconnect()
-
-
-    def audio_player(self, samplerate, channels):
-        """Play audio frames from the queue"""
-        with speaker.player(samplerate=samplerate, channels=channels, blocksize=1152) as stream:
-            while self.run:
-                frame = self.audio_queue_out.get()
-                if frame is None:
-                    break
-                audio_data = frame.to_ndarray().astype("float32").T
-                audio_data *= self.gain_output
-                stream.play(audio_data)
-
-
-    def audio_recorder(self, samplerate, channels):
-        """Record audio and add frames to the queue"""
-        with self.microphone.recorder(samplerate=samplerate, channels=channels) as rec:
-            while self.run and self.recording:
-                audio_data = rec.record(numframes=960)
-                try:
-                    self.audio_queue_in.put_nowait(audio_data)
-                except queue.Full:
-                    try:   # drop old data and always keep newest
-                        self.audio_queue_in.get_nowait()
-                    except queue.Empty:
-                        pass
-                    self.audio_queue_in.put_nowait(audio_data)
-        if self.recording:
-            self.audio_queue_in.put(None)
 
 
     def rtcp_sender_report_loop(self):
@@ -1176,6 +1169,106 @@ class VoiceHandler:
                 block_offset += 24
 
 
+    def audio_player(self, samplerate, channels):
+        """Play audio frames from the queue"""
+        with speaker.player(samplerate=samplerate, channels=channels, blocksize=960) as stream:
+            mixed = np.zeros((960, channels), dtype="float32")
+            while self.run:
+                frames_to_mix = []
+
+                with self.audio_queue_out_lock:
+                    for buf in self.audio_queue_out.values():
+                        if buf:
+                            frames_to_mix.append(buf.popleft())
+
+                if frames_to_mix:
+                    mixed.fill(0)
+                    for frame in frames_to_mix:
+                        audio = frame.to_ndarray().astype("float32").T
+                        mixed += audio * self.gain_output
+                    logger.info(len(frames_to_mix))
+                    # if len(frames_to_mix) > 1:   # normalize if many are talking
+                    #     mixed /= np.sqrt(len(frames_to_mix))
+                    np.clip(mixed, -1.0, 1.0, out=mixed)   # hard limiter
+                    # np.multiply(mixed, 3.0, out=mixed)   # soft limiter (with normalization)
+                    # np.tanh(mixed, out=mixed)
+                    # mixed /= np.tanh(g)
+                else:
+                    mixed.fill(0)  # silence
+
+                stream.play(mixed)
+
+
+    def audio_recorder(self, samplerate, channels):
+        """Record audio and add frames to the queue"""
+        with self.microphone.recorder(samplerate=samplerate, channels=channels) as rec:
+            while self.run and self.recording:
+                audio_data = rec.record(numframes=960)
+                if self.pause_mic:
+                    continue
+                try:
+                    self.audio_queue_in.put_nowait(audio_data)
+                except queue.Full:
+                    try:   # drop old data and always keep newest
+                        self.audio_queue_in.get_nowait()
+                    except queue.Empty:
+                        pass
+                    self.audio_queue_in.put_nowait(audio_data)
+        if self.recording:
+            self.audio_queue_in.put(None)
+
+
+    def audio_file_player(self, path, mix=False):
+        """Play audio file from specified path. If mic is ON then mix sounds"""
+        self.playing = True
+        container = av.open(path)
+        if not container.streams.audio:
+            return
+        in_stream = container.streams.audio[0]
+        resampler = av.audio.resampler.AudioResampler(format="fltp", layout="stereo", rate=48000)
+        fifo = av.audio.fifo.AudioFifo()
+        frame_duration = 960 / 48000
+        next_time = time.perf_counter()
+        if not mix:
+            pass
+        self.pause_mic = True
+
+        for frame in container.decode(in_stream):
+            if not self.playing:
+                break
+
+            for new_frame in resampler.resample(frame):
+                if not self.playing:
+                    break
+                new_frame.pts = None
+                fifo.write(new_frame)
+
+                while fifo.samples >= 960 and self.playing:
+                    arr = fifo.read(960).to_ndarray()
+                    if arr.dtype == np.int16:
+                        arr = arr.astype(np.float32) / 32768.0
+                    else:
+                        arr = arr.astype(np.float32)
+                    self.audio_queue_in.put(arr.T)
+
+                    next_time += frame_duration
+                    sleep_time = next_time - time.perf_counter()
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+        self.pause_mic = False
+
+
+    def stop_file_playback(self):
+        """Stop playback of all audio file player threads"""
+        if self.playing:
+            self.playing = False
+            try:   # empty queue
+                while True:
+                    self.audio_queue_in.get_nowait()
+            except queue.Empty:
+                pass
+
+
     def get_rtt(self):
         """Get rtt value in ms"""
-        return self.rtt_ms
+        # return self.rtt_ms   # disabled until rtcp sr-rr is fixed

@@ -210,7 +210,7 @@ def notify_send(title, message, sound="message", image_path=None, custom_sound=N
             threading.Thread(target=play_audio, daemon=True, args=(custom_sound, )).start()
         command = ["osascript", "-e", f"'display notification \"{message}\" with title \"{title}\"'"]
         # osascript cant display image in notification
-        _ = subprocess.Popen(
+        subprocess.Popen(
             command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -222,7 +222,7 @@ def notify_remove(notification_id):
     """Removes notification by its id. Linux only."""
     if sys.platform == "linux" and have_gdbus:
         command = ["gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path", "/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.CloseNotification", str(notification_id)]
-        _ = subprocess.Popen(
+        subprocess.Popen(
             command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -563,7 +563,7 @@ def native_open(path, mpv_path="", yt_in_mpv=True):
             return
     else:
         current_runner = runner
-    _ = subprocess.Popen(
+    subprocess.Popen(
         [current_runner, path],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

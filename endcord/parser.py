@@ -519,8 +519,8 @@ def command_string(text):
             except ValueError:
                 pass
 
-    # 21 - RECORD
-    elif text_lower.startswith("record"):
+    # 21 - RECORD_VOICE_MESSAGE
+    elif text_lower.startswith("record_voice_message"):
         cmd_type = 21
         text += " "
         cmd_args = {"cancel": text.split(" ")[1].lower() == "cancel"}

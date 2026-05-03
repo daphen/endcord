@@ -504,7 +504,7 @@ def search_mics(devices, query, limit=50, score_cutoff=15):
     """Generic search for microphones"""
     results = []
     worst_score = score_cutoff
-    results.append(("Auto", "voice_set_input_device " + "Auto", score_cutoff + 1))
+    results.append(("Auto", "voice_set_input_device " + "Auto", score_cutoff + fuzzy_match_score(query, "Auto") + 0.1))
 
     for device in devices:
         score = fuzzy_match_score(query, device)
@@ -515,6 +515,7 @@ def search_mics(devices, query, limit=50, score_cutoff=15):
             heapq.heappop(results)
             worst_score = results[0][2]
 
+    results.append(("OFF", "voice_set_input_device " + "OFF", score_cutoff + fuzzy_match_score(query, "OFF") + 0.1))
     return sorted(results, key=lambda x: x[2], reverse=True)
 
 

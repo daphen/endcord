@@ -25,7 +25,8 @@ Note: always put string in `""`. To use `"` inside the string escape it like thi
 - `send_typing = True`  
     Allow `[your_username] is typing...` to be sent.
 - `desktop_notifications = True`  
-    Allow sending desktop notifications when user is pinged/mentioned.
+    Allow sending desktop notifications when user is pinged/mentioned.  
+    Set to `2` to disable notification but keep sound, only `custom_notification_sound` will be used.
 - `notification_in_active = True`  
     Allow sending desktop notifications for mentions even in active channel.
 - `remove_previous_notification = True`  
@@ -150,7 +151,7 @@ Note: always put string in `""`. To use `"` inside the string escape it like thi
 - `custom_notification_sound = None`  
     Path to audio file played when notification is sent. Set to `None` to disable.
 - `linux_ringtone_incoming = "phone-incoming-call"`  
-    Sound played when there is incoming call. Linux only. Set to None to disable. Sound names can be found in `/usr/share/sounds/freedesktop/stereo`, without extension.
+    Sound played when there is incoming call. Linux only. Set to None to disable. Sound names can be found in `/usr/share/sounds/freedesktop/stereo`, without extension. Set this and custom_ringtone_incoming to `None` to disable sound entirely.
 - `custom_ringtone_incoming = None`  
     Path to audi file played when there is incoming call. Set to `None` to disable. The file will be played in loop.
 - `linux_ringtone_outgoing = "phone-outgoing-call"`  

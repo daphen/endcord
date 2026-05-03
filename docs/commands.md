@@ -15,8 +15,6 @@
     Show message search prompt or perform search with provided string.
 - `gif` / `gif [query]`  
     Show gif search prompt or perform gif search with provided string.
-- `record` / `record cancel`  
-    Toggle recording, will send when stopped.
 - `upload` / `upload [path]`  
     Prompt for upload path, or provide it in command and start uploading.
 - `profile` / `profile <@[user_id]>`  
@@ -72,6 +70,8 @@
     View profile picture of user from currently selected message or specified user.
 - `paste`  
     Try to paste image or file as attachment, or text to input line. Requires either media support (all platforms, no text) or `xclip`/`wl-clipboard` (Linux only).  
+- `record_voice_message` / `record_voice_message cancel`  
+    Start/stop/cancel recording voice message, will send when stopped.
 - `check_standing`  
     Check account standing. 0-100 value, anything non-100 is concerning.  
 - `hide` / `hide <#[channel_id]>`  

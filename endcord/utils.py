@@ -158,6 +158,8 @@ def get_extensions(path):
 
 def find_linux_sound(name):
     """Return path of sound file from its name, if it exists"""
+    if not name:
+        return None
     if sys.platform == "linux":
         path = os.path.join("/usr/share/sounds/freedesktop/stereo/", name + ".oga")
         if os.path.exists(path):
@@ -176,7 +178,7 @@ def load_json(file, default=None, dir_path=peripherals.config_path, create=False
             data = json.load(f)
             if default:
                 for key, value in default.items():
-                    _ = data.setdefault(key, value)
+                    data.setdefault(key, value)
             return data
     except Exception:
         return default

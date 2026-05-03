@@ -34,14 +34,14 @@ def prepare_embeds(embeds, message_content):
         media = []
         embed_type = embed.get("type", "unknown")
 
-        if "url" in embed and "tenor.com/" not in embed["url"]:
+        if "url" in embed and "tenor.com/" not in embed["url"] and "giphy.com/" not in embed["url"]:
             # dont repeat unless its discord attachment and handle x=twitter
             if embed_type != "rich" or ".discordapp." in embed["url"] or embed["url"] not in message_content.replace("https://x.com", "https://twitter.com"):
                 content.append(embed["url"])
                 main_url = embed["url"]
                 skip_main_url = True
 
-        if "author" in embed and "name" in embed["author"]:
+        if "author" in embed and "name" in embed["author"] and "giphy.com/" not in embed["url"]:
             content.append(embed["author"]["name"])
         if "title" in embed:
             content.append(embed["title"])

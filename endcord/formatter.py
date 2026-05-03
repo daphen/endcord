@@ -2354,7 +2354,8 @@ def generate_extra_line_call(call_participants, volume_in, volume_out, max_len, 
     """Generate extra line containing iformation about ongoing call"""
     max_len = max_len - bordered * 3
     left_text = "In the call: You"
-    right_text = f"({min(rtt, 999.9):.1f}ms) [I:{(str(volume_in)+"%").center(4)} O:{(str(volume_out)+"%").center(4)}] [Leave]"
+    rtt_text = f"({min(rtt, 999.9):.1f}ms) " if rtt is not None else ""
+    right_text = f"{rtt_text}[I:{(str(volume_in)+"%").center(4)} O:{(str(volume_out)+"%").center(4)}] [Leave]"
 
     for participant in call_participants:
         left_text += f", {participant["name"]}"

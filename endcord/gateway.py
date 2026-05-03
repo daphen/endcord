@@ -196,7 +196,7 @@ class Gateway():
             for extension_point in self.extension_cache:
                 if extension_point[0] == method_name:
                     for method in extension_point[1]:
-                        _ = method(*args)
+                        method(*args)
             return
 
         # try to load method from extensions and add to cache
@@ -206,7 +206,7 @@ class Gateway():
             if callable(method):
                 if cache:
                     methods.append(method)
-                _ = method(*args)
+                method(*args)
         if cache:
             self.extension_cache.append((method_name, methods))
 
@@ -1983,7 +1983,7 @@ class Gateway():
         if error:
             logger.info("Failed to resume connection")
             return 9
-        _ = zlib_decompress(self.ws.recv())
+        zlib_decompress(self.ws.recv())
         payload = {"op": 6, "d": {"token": self.token, "session_id": self.session_id, "seq": self.sequence}}
         self.send(payload)
         try:
@@ -2014,9 +2014,10 @@ class Gateway():
                 self.ws = websocket.WebSocket()
                 error = self.connect_ws()
                 if error:
-                    logger.warning("No internet connection")
+                    logger.debug("No internet connection")
                     self.ws.close()
-                    threading.Thread(target=self.wait_online, daemon=True, args=()).start()
+                    if not self.wait:
+                        threading.Thread(target=self.wait_online, daemon=True, args=()).start()
                     return
                 self.authenticate()
             self.wait = False
@@ -2028,7 +2029,7 @@ class Gateway():
                 self.heartbeat_thread = threading.Thread(target=self.send_heartbeat, daemon=True)
                 self.heartbeat_thread.start()
             self.state = 1
-            logger.info("Connection established")
+            logger.debug("Connection established")
         except (socket.gaierror, TimeoutError, ConnectionResetError):
             if not self.wait:   # if not running from wait_oline
                 logger.warning("No internet connection")

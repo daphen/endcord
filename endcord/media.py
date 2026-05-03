@@ -260,6 +260,8 @@ class TerminalMedia():
         self.path = None
         self.media_type = None
         self.seek = None
+        self.video_duration = 0
+        self.video_time = 0
         self.screen_size = terminal_utils.get_size()
         self.img = None
         self.ui = ui
@@ -443,56 +445,29 @@ class TerminalMedia():
         """Play only audio"""
         if self.ui:
             self.show_ui()
-
-        self.seek = None
         if not have_sound:
             self.ended = True
             return
         if self.ui:
             self.draw_blank()
-
         container = av.open(path)
         self.ended = False
-        self.video_time = 0   # using video_time to simplify controls
-
         all_audio_streams = container.streams.audio
         if not all_audio_streams:   # no audio?
             return
         audio_stream = all_audio_streams[0]
 
-        if audio_stream.duration:
-            self.video_duration = float(audio_stream.duration * audio_stream.time_base)
-        else:
-            self.video_duration = audio_stream.frames / audio_stream.average_rate * audio_stream.time_base
-        if self.video_duration == 0:
-            self.video_duration = 1   # just in case
-
-        frame_duration = 1 / container.streams.audio[0].codec_context.sample_rate
-
         with speaker.player(samplerate=audio_stream.rate, channels=audio_stream.channels, blocksize=1152) as stream:
             start = int(time.time())
             while self.playing:
                 for frame in container.decode(audio=0):
-                    if self.seek is not None:
-                        container.seek(int(self.seek / audio_stream.time_base), stream=audio_stream)
-                        self.video_time = self.seek
-                        self.seek = None
-                        if self.pause_after_seek:
-                            self.pause_after_seek = False
-                            self.pause = True
-                            self.ui_line = self.build_ui_string()
-                            self.show_ui()
-                        continue
                     if not self.playing:
                         break
                     while self.pause:
                         time.sleep(0.1)
-                    if self.pause_after_seek:
-                        continue
                     audio = frame.to_ndarray().astype("float32").T
                     audio *= self.gain
                     stream.play(audio)
-                    self.video_time += frame.samples * frame_duration
                 if loop:
                     if int(time.time()) - start > loop_max:
                         break

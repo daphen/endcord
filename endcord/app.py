@@ -624,14 +624,12 @@ class Endcord:
                 "afk": False,
                 "client_state": "OFFLINE",
             }
-        for num, _ in enumerate(self.channel_cache):
+        # clear messages from cached channels
+        for num in range(len(self.channel_cache) - 1, -1, -1):
             if self.channel_cache[num][2]:
-                if len(self.channel_cache[num]) < 4:
-                    self.channel_cache[num].append(True)
-                else:
-                    self.channel_cache[num][3] = True   # mark as invalid
+                self.channel_cache[num][2] = []
             else:
-                _ = self.channel_cache.pop(num)
+                self.channel_cache.pop(num)
         self.gateway.set_channel_cache(self.channel_cache)
 
 
@@ -715,8 +713,10 @@ class Endcord:
             self.update_extra_line("Can't switch channel when offline.", timed=False)
             return
 
-        # select new current channel and start voice call if its voice channel
+        # select new current channel
         this_guild = self.select_current_channels(channel_id, guild_id, parent_hint)
+
+        # start voice call if its voice channel
         if this_guild == -1:
             channel = {}
             for guild in self.guilds:
@@ -732,7 +732,7 @@ class Endcord:
                 self.update_extra_line("You don't have permission to connect to this voice channel.")
                 return
             this_voice_states = self.gateway.get_voice_states().get(channel["id"], {})
-            if this_voice_states and this_voice_states[0] >= channel["user_limit"]:   # check if full
+            if this_voice_states and channel["user_limit"] and this_voice_states[0] >= channel["user_limit"]:   # check if full
                 self.update_extra_line("This voice channel is currently full.")
                 return
             self.start_call(
@@ -870,7 +870,7 @@ class Endcord:
         self.gateway.set_subscribed_channels([x[0] for x in self.channel_cache] + [channel_id])
         if self.recording:
             self.recording = False
-            _ = recorder.stop()
+            recorder.stop()
 
         # check for call popups
         if self.incoming_calls and not self.in_call:
@@ -1013,7 +1013,7 @@ class Endcord:
 
         if self.recording:
             self.recording = False
-            _ = recorder.stop()
+            recorder.stop()
 
         self.member_list = []
         self.current_roles = []
@@ -1239,7 +1239,7 @@ class Endcord:
 
     def add_to_channel_cache(self, channel_id, messages, set_pinned):
         """Add messages to channel cache"""
-        # format: channel_cache = [[channel_id, messages, pinned, *invalid], ...]
+        # format: channel_cache = [[channel_id, messages, pinned], ...]
         # skipping deleted because they are separately cached
         if not self.limit_channel_cache:
             return
@@ -1686,7 +1686,7 @@ class Endcord:
                 if self.current_channel.get("allow_attach", True):
                     if self.recording:   # stop recording voice message
                         self.recording = False
-                        _ = recorder.stop()
+                        recorder.stop()
                     self.uploading = True
                     self.ignore_typing = True
                     self.update_status_line()
@@ -2923,7 +2923,7 @@ class Endcord:
                     self.restore_input_text = (None, "autocomplete")
                     if self.recording:   # stop recording voice message
                         self.recording = False
-                        _ = recorder.stop()
+                        recorder.stop()
                     self.uploading = True
                     self.ignore_typing = True
                     reset = False
@@ -3078,7 +3078,7 @@ class Endcord:
                             break
                 self.set_status(new_status)
 
-        elif cmd_type == 21:   # RECORD
+        elif cmd_type == 21:   # RECORD_VOICE_MESSAGE
             cancel = cmd_args.get("cancel")
             if self.recording:
                 self.stop_recording(cancel=cancel)
@@ -3658,7 +3658,7 @@ class Endcord:
             device = cmd_args["name"]
             if device == "Auto":
                 device = None
-            if device in peripherals.get_audio_input_devices() or not device:
+            if device in peripherals.get_audio_input_devices() or not device or device == "OFF":
                 self.state["audio_input_device"] = device
                 utils.save_json(self.state, f"state_{self.profiles["selected"]}.json")
                 if self.voice_gateway:
@@ -5764,7 +5764,7 @@ class Endcord:
                 cmd = [self.config["custom_media_player"], path]
                 if self.config["custom_media_hint"]:
                     cmd.append(media_hint)
-                _ = subprocess.run(
+                subprocess.run(
                     cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -7049,7 +7049,7 @@ class Endcord:
                 self.most_recent_incoming_call = dm["id"]
                 if self.recording:   # stop recording voice message
                     self.recording = False
-                    _ = recorder.stop()
+                    recorder.stop()
                 self.permanent_extra_line = formatter.generate_extra_line_ring(
                     dm["name"],
                     self.tui.get_dimensions()[2][1],
@@ -7063,7 +7063,7 @@ class Endcord:
                         self.start_ringing(custom_ringtone)
                     elif linux_ringtone and os.path.exists(linux_ringtone):
                         self.start_ringing(linux_ringtone)
-                    else:
+                    elif self.config["linux_ringtone_incoming"] or custom_ringtone:
                         logger.warning(f"Specified ringtone paths are invalid: {custom_ringtone}, {linux_ringtone}")
 
         elif event["op"] == "CALL_UPDATE" and not (self.in_call or self.joining_call):
@@ -7074,7 +7074,7 @@ class Endcord:
                     self.start_ringing(custom_ringtone)
                 elif linux_ringtone and os.path.exists(linux_ringtone):
                     self.start_ringing(linux_ringtone)
-                else:
+                elif self.config["linux_ringtone_incoming"] or custom_ringtone:
                     logger.warning(f"Specified ringtone paths are invalid: {custom_ringtone}, {linux_ringtone}")
 
         elif event["op"] == "CALL_DELETE" and event["channel_id"] in self.incoming_calls:
@@ -7429,78 +7429,82 @@ class Endcord:
 
 
     def send_desktop_message_notification(self, new_message, avatar_id=None):
-        """
-        Send desktop notification, and keep its ID so it can be removed.
-        """
-        if self.enable_notifications and self.my_status["status"] != "dnd":
-            data = new_message["d"]
-            channel_id = data["channel_id"]
+        """Send desktop notification, and keep its ID so it can be removed"""
+        if not self.enable_notifications or self.my_status["status"] == "dnd":
+            return
 
-            # remove previous notification
-            if self.remove_prev_notif:
-                for num, notification in enumerate(self.notifications):
-                    if notification["channel_id"] == channel_id:
-                        peripherals.notify_remove(notification["id"])
-                        self.notifications.pop(num)
-                        break
+        data = new_message["d"]
+        channel_id = data["channel_id"]
 
-            # collect data
-            guild_id = data["guild_id"]
-            for guild in self.guilds:
-                if guild["guild_id"] == guild_id:
-                    guild_name = guild["name"]
-                    channels = guild["channels"]
+        # remove previous notification
+        if self.remove_prev_notif:
+            for num, notification in enumerate(self.notifications):
+                if notification["channel_id"] == channel_id:
+                    peripherals.notify_remove(notification["id"])
+                    self.notifications.pop(num)
                     break
-            else:
-                guild_name = None
-                channels = []
-            for guild in self.all_roles:
-                if guild["guild_id"] == guild_id:
-                    guild_roles = guild["roles"]
+
+        # collect data
+        guild_id = data["guild_id"]
+        for guild in self.guilds:
+            if guild["guild_id"] == guild_id:
+                guild_name = guild["name"]
+                channels = guild["channels"]
+                break
+        else:
+            guild_name = None
+            channels = []
+        for guild in self.all_roles:
+            if guild["guild_id"] == guild_id:
+                guild_roles = guild["roles"]
+                break
+        else:
+            guild_roles = []
+
+        # build and send notification
+        title, body = formatter.generate_message_notification(
+            data,
+            channels,
+            guild_roles,
+            guild_name,
+            self.config["convert_timezone"],
+            use_global_name=("%global_name" in self.config["format_message"]),
+            use_nick=self.config["use_nick_when_available"],
+        )
+
+        # download pfp
+        if self.notifications_pfp and avatar_id:
+            # check if cached
+            cache_path = os.path.expanduser(peripherals.cache_path)
+            for file_name in os.listdir(cache_path):
+                avatar_path = os.path.join(cache_path, file_name)
+                if os.path.isfile(avatar_path) and os.path.splitext(file_name)[0].strip("_round") == avatar_id:
                     break
-            else:
-                guild_roles = []
+            else:   # download to cache
+                if self.notifications_pfp != 1:
+                    avatar_path = self.discord.get_pfp(data["user_id"], avatar_id, size=self.notifications_pfp, save_path=cache_path)
+                else:
+                    avatar_path = self.discord.get_pfp(data["user_id"], avatar_id, size=256, save_path=cache_path)
+        else:
+            avatar_path = None
 
-            # build and send notification
-            title, body = formatter.generate_message_notification(
-                data,
-                channels,
-                guild_roles,
-                guild_name,
-                self.config["convert_timezone"],
-                use_global_name=("%global_name" in self.config["format_message"]),
-                use_nick=self.config["use_nick_when_available"],
-            )
+        if self.notification_path and self.enable_notifications == 2:
+            threading.Thread(target=peripherals.play_audio, daemon=True, args=(self.notification_path, )).start()
+            return
 
-            # download pfp
-            if self.notifications_pfp and avatar_id:
-                # check if cached
-                cache_path = os.path.expanduser(peripherals.cache_path)
-                for file_name in os.listdir(cache_path):
-                    avatar_path = os.path.join(cache_path, file_name)
-                    if os.path.isfile(avatar_path) and os.path.splitext(file_name)[0].strip("_round") == avatar_id:
-                        break
-                else:   # download to cache
-                    if self.notifications_pfp != 1:
-                        avatar_path = self.discord.get_pfp(data["user_id"], avatar_id, size=self.notifications_pfp, save_path=cache_path)
-                    else:
-                        avatar_path = self.discord.get_pfp(data["user_id"], avatar_id, size=256, save_path=cache_path)
-            else:
-                avatar_path = None
+        notification_id = peripherals.notify_send(
+            title,
+            body,
+            sound=self.notification_sound,
+            image_path=avatar_path,
+            custom_sound=self.notification_path,
+        )
 
-            notification_id = peripherals.notify_send(
-                title,
-                body,
-                sound=self.notification_sound,
-                image_path=avatar_path,
-                custom_sound=self.notification_path,
-            )
-
-            # save notification id
-            self.notifications.append({
-                "id": notification_id,
-                "channel_id": channel_id,
-            })
+        # save notification id
+        self.notifications.append({
+            "id": notification_id,
+            "channel_id": channel_id,
+        })
 
 
     def check_for_updates(self, force=False, open_web=False, app=True, extensions=True, update=False):
