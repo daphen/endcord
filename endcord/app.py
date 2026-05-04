@@ -1545,13 +1545,17 @@ class Endcord:
                 if msg_index is None:
                     continue
                 message = self.messages[msg_index]
-                if (message["user_id"] == self.my_id or self.active_channel["admin"]) and "deleted" not in message and "pending" not in message:
-                    self.reset_states()
-                    self.ignore_typing = True
-                    self.deleting = message["id"]
-                    self.add_to_store(self.active_channel["channel_id"], input_text)
-                    self.restore_input_text = ("DELETE?", "prompt")
-                    self.update_status_line()
+                ephemeral_msg = message.get("bot") == 2
+                if (message["user_id"] == self.my_id or self.active_channel["admin"] or ephemeral_msg) and "deleted" not in message and "pending" not in message:
+                    if ephemeral_msg:
+                        self.update_chat(change_amount=0, scroll=False, change_id=msg_index, change_type=2)
+                    else:
+                        self.reset_states()
+                        self.ignore_typing = True
+                        self.deleting = message["id"]
+                        self.add_to_store(self.active_channel["channel_id"], input_text)
+                        self.restore_input_text = ("DELETE?", "prompt")
+                        self.update_status_line()
 
             # toggle mention ping
             elif action == 6:

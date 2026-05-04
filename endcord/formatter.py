@@ -1615,8 +1615,10 @@ class ChatGenerator:
                 content += f"[lottie sticker] (cannot be opened): {sticker["name"]}"
             else:
                 content += f"[gif sticker] (can be opened): {sticker["name"]}"
-        if "app" in message or "webhook" in message:
-            app_string = self.app_string_format.replace("%app", "App" if "bot" in message else "Webhook")
+        if "bot" in message:
+            app_string = self.app_string_format.replace("%app", "App - Epemeral" if message["bot"] == 2 else "App")
+        elif "webhook" in message:
+            app_string = self.app_string_format.replace("%app", "Webhook")
         else:
             app_string = None
         message_line = lazy_replace(self.format_message, "%username", lambda: normalize_string(message["username"], self.dyn_limit_username, emoji_safe=False, fill=not(self.dynamic_name_len)))

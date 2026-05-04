@@ -264,7 +264,7 @@ def prepare_message(message):
     if component_info:
         message_dict["component_info"] = component_info
     if "bot" in message["author"]:
-        message_dict["bot"] = True
+        message_dict["bot"] = 1 + bool(message["flags"] & 64)   # 2 if ephemeral message
     if "webhook_id" in message:
         message_dict["webhook"] = True
     return message_dict

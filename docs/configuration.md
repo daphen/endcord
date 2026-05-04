@@ -485,7 +485,7 @@ Note: everything after `%content` may be pushed to newline.
 - `%channel` - to which channel in this server the message belongs, limited with `limit_channel_name`
 
 ### app_string
-- `%app` - either `App` or `Webhook`
+- `%app` - either `App`, `App - Ephemeral` or `Webhook`
 
 
 ## pgcurses.json - config for experimental windowed mode
