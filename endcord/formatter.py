@@ -2444,7 +2444,7 @@ def generate_extra_window_profile(user_data, user_roles, presence, max_len):
         custom = ""
         if presence.get("custom_status_emoji"):
             status_emoji = presence["custom_status_emoji"]["name"]
-            if not emoji.is_emoji(status_emoji):
+            if not utils.is_emoji(status_emoji):
                 status_emoji = f":{status_emoji}:"
             custom += f"{status_emoji} "
         if presence["custom_status"]:
@@ -3324,7 +3324,7 @@ def generate_tree(dms, guilds, threads, read_state, guild_folders, activities, c
                             tree_format.append(code)
                             tree_metadata.append({
                                 "id": channel["id"],
-                                "type": 15 if forum else 0,
+                                "type": 15 if forum else 2 if channel.get("voice") else 0,
                                 "name": channel["name"],
                                 "muted": channel["muted"],
                                 "parent_index": category_index,

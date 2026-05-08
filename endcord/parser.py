@@ -799,15 +799,9 @@ def command_string(text):
             cmd_type = 0
             cmd_args = {"value": 1}
 
-    # 56 - RENAME_FOLDER
-    elif text_lower.startswith("rename_folder"):
+    # 56 - VOICE_OPEN_CHAT
+    elif text_lower.startswith("voice_open_chat"):
         cmd_type = 56
-        name = text[14:].strip(" ")
-        if name:
-            cmd_args = {"name": name}
-        else:
-            cmd_type = 0
-            cmd_args = {"value": 1}
 
     # 57 - VIEW_EMOJI
     elif text_lower.startswith("view_emoji"):
@@ -1003,5 +997,15 @@ def command_string(text):
     # 80 - COPY_ATTACHMENT
     elif text_lower.startswith("copy_attachment"):
         cmd_type = 80
+
+    # 81 - RENAME_FOLDER
+    elif text_lower.startswith("rename_folder"):
+        cmd_type = 81
+        name = text[14:].strip(" ")
+        if name:
+            cmd_args = {"name": name}
+        else:
+            cmd_type = 0
+            cmd_args = {"value": 1}
 
     return cmd_type, cmd_args

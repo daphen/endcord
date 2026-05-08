@@ -67,7 +67,7 @@ MAIN_LOOP_POLL_DELAY = 0.1   # if too small will use more cpu
 MB = 1024 * 1024
 USER_UPLOAD_LIMITS = (10*MB, 50*MB, 500*MB, 50*MB)   # premium tier 0, 1, 2, 3 (none, classic, full, basic)
 GUILD_UPLOAD_LIMITS = (10*MB, 10*MB, 50*MB, 100*MB)   # premium tier 0, 1, 2, 3
-FORUM_COMMANDS = (1, 2, 7, 13, 14, 15, 17, 20, 22, 25, 27, 29, 30, 31, 32, 40, 42, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 61, 62, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 79)
+FORUM_COMMANDS = (1, 2, 7, 13, 14, 15, 17, 20, 22, 25, 27, 29, 30, 31, 32, 40, 42, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 61, 62, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 79, 81)
 COLLAPSE_ALL_EXCEPT_OPTIONS = ("current", "selected", "above", "bellow")
 STANDING_TYPES = ("All Good", "Limited", "Very Limited", "At risk", "Suspended")
 
@@ -704,7 +704,7 @@ class Endcord:
                     self.dms.remove(dm)
 
 
-    def switch_channel(self, channel_id, channel_name, guild_id, guild_name, parent_hint=None, preload=False, delay=False):
+    def switch_channel(self, channel_id, guild_id, parent_hint=None, preload=False, delay=False, voice=True):
         """All that should be done when switching channel, and also proxy to joining voice channels"""
         # dont switch to same channel
         if channel_id == self.active_channel["channel_id"]:
@@ -716,10 +716,10 @@ class Endcord:
             return
 
         # select new current channel
-        this_guild = self.select_current_channels(channel_id, guild_id, parent_hint)
+        this_guild = self.select_current_channels(channel_id, guild_id, parent_hint, voice=voice)
 
         # start voice call if its voice channel
-        if this_guild == -1:
+        if voice and this_guild == -1:
             channel = {}
             for guild in self.guilds:
                 if guild["guild_id"] == guild_id:
@@ -778,9 +778,9 @@ class Endcord:
 
         # update active channel
         self.active_channel["guild_id"] = guild_id
-        self.active_channel["guild_name"] = guild_name
+        self.active_channel["guild_name"] = this_guild["name"] if this_guild else None
         self.active_channel["channel_id"] = channel_id
-        self.active_channel["channel_name"] = channel_name
+        self.active_channel["channel_name"] = self.current_channel["name"]
         self.active_channel["pinned"] = False
         self.add_running_task("Switching channel", 1)
 
@@ -1117,7 +1117,7 @@ class Endcord:
         return folder_changed
 
 
-    def select_current_channels(self, channel_id=None, guild_id=None, parent_hint=None, refresh=False):
+    def select_current_channels(self, channel_id=None, guild_id=None, parent_hint=None, refresh=False, voice=True):
         """Select current channels and current channel objects and update things related to them"""
         # update list of channels
         if not channel_id:
@@ -1139,14 +1139,14 @@ class Endcord:
         current_channel = {}
         for channel in current_channels:
             if channel["id"] == channel_id:
-                if channel["type"] == 2:   # voice channel
+                if channel["type"] == 2 and voice:   # voice channel
                     return -1   # skip any changes
                 current_channel = channel
                 break
 
         # check threads if no channel
         else:
-            if parent_hint:   # thread will have parent_hint
+            if parent_hint and guild_id:   # thread will have parent_hint
                 for guild in self.threads:
                     if guild["guild_id"] == guild_id:
                         for channel in guild["channels"]:
@@ -1157,6 +1157,12 @@ class Endcord:
                                         break
                                 break
                         break
+
+        # check dms
+        if not current_channel:
+            for dm in self.dms:
+                if dm["id"] == channel_id:
+                    current_channel = {"name": dm["name"], "type": dm["type"]}
 
         # update
         self.current_channels = current_channels
@@ -1500,8 +1506,8 @@ class Endcord:
                 if input_text and input_text != "\n":
                     self.add_to_store(self.active_channel["channel_id"], input_text)
                 sel_channel = self.tree_metadata[tree_sel]
-                guild_id, parent_id, guild_name = self.find_parents_from_tree(tree_sel)
-                self.switch_channel(sel_channel["id"], sel_channel["name"], guild_id, guild_name, parent_hint=parent_id)
+                guild_id, parent_id, _ = self.find_parents_from_tree(tree_sel)
+                self.switch_channel(sel_channel["id"], guild_id, parent_hint=parent_id)
                 self.reset_states(replying=True)
                 self.update_status_line()
 
@@ -1809,9 +1815,7 @@ class Endcord:
                             continue
                         if channel_id and channel_id != self.active_channel["channel_id"]:
                             guild_id = self.active_channel["guild_id"]
-                            guild_name = self.active_channel["guild_name"]
-                            channel_name = self.channel_name_from_id(channel_id)
-                            self.switch_channel(channel_id, channel_name, guild_id, guild_name)
+                            self.switch_channel(channel_id, guild_id)
                         self.tui.disable_wrap_around(False)
                         self.go_to_message(message_id)
                         self.close_extra_window()
@@ -2087,9 +2091,7 @@ class Endcord:
                         message = messages[msg_index]
                         self.switch_channel(
                             message["id"],
-                            message["name"],
                             self.active_channel["guild_id"],
-                            self.active_channel["guild_name"],
                             parent_hint=self.active_channel["channel_id"],
                         )
                         self.reset_states()
@@ -2195,9 +2197,9 @@ class Endcord:
                                 clicked_id = clicked_id.split("/")[0]
                             else:
                                 message_id = None
-                            channel_id, channel_name, guild_id, guild_name, parent_hint = self.find_parents_from_id(clicked_id)
-                            if channel_name:
-                                self.switch_channel(channel_id, channel_name, guild_id, guild_name, parent_hint=parent_hint)
+                            channel_id, _, guild_id, _, parent_hint = self.find_parents_from_id(clicked_id)
+                            if channel_id:
+                                self.switch_channel(channel_id, guild_id, parent_hint=parent_hint)
                                 if message_id:
                                     self.go_to_message(message_id)
 
@@ -2532,9 +2534,9 @@ class Endcord:
                         object_id = object_id.split("/")[0]
                     else:
                         message_id = None
-                    channel_id, channel_name, guild_id, guild_name, parent_hint = self.find_parents_from_id(object_id)
-                    if channel_name:
-                        self.switch_channel(channel_id, channel_name, guild_id, guild_name, parent_hint=parent_hint)
+                    channel_id, _, guild_id, _, parent_hint = self.find_parents_from_id(object_id)
+                    if channel_id:
+                        self.switch_channel(channel_id, guild_id, parent_hint=parent_hint)
                         if message_id:
                             self.go_to_message(message_id)
 
@@ -2644,9 +2646,7 @@ class Endcord:
                     # failsafe if messages got rewritten
                     self.switch_channel(
                         self.messages[chat_sel]["id"],
-                        self.messages[chat_sel]["name"],
                         self.active_channel["guild_id"],
-                        self.active_channel["guild_name"],
                         parent_hint=self.active_channel["channel_id"],
                     )
                     self.reset_states()
@@ -2710,9 +2710,7 @@ class Endcord:
                         continue
                     if channel_id and channel_id != self.active_channel["channel_id"]:
                         guild_id = self.active_channel["guild_id"]
-                        guild_name = self.active_channel["guild_name"]
-                        channel_name = self.channel_name_from_id(channel_id)
-                        self.switch_channel(channel_id, channel_name, guild_id, guild_name)
+                        self.switch_channel(channel_id, guild_id)
                     self.tui.disable_wrap_around(False)
                     self.go_to_message(message_id)
                     self.close_extra_window()
@@ -3059,9 +3057,9 @@ class Endcord:
                     object_id = object_id.split("/")[0]
                 else:
                     message_id = None
-                channel_id, channel_name, guild_id, guild_name, parent_hint = self.find_parents_from_id(object_id)
-                if channel_name:
-                    self.switch_channel(channel_id, channel_name, guild_id, guild_name, parent_hint=parent_hint)
+                channel_id, _, guild_id, _, parent_hint = self.find_parents_from_id(object_id)
+                if channel_id:
+                    self.switch_channel(channel_id, guild_id, parent_hint=parent_hint)
                     if message_id:
                         self.go_to_message(message_id)
             elif channels:
@@ -3133,7 +3131,7 @@ class Endcord:
                 else:
                     object_id = self.checkpoint
                     tp = True
-            channel_id, channel_name, guild_id, guild_name, parent_hint = self.find_parents_from_id(object_id)
+            channel_id, _, guild_id, _, parent_hint = self.find_parents_from_id(object_id)
             if channel_id == guild_id:
                 channel_id = None
             # guild
@@ -3169,7 +3167,7 @@ class Endcord:
                     self.open_guild(0, select=True, open_only=True)
                     self.tui.tree_select(self.tree_pos_from_id(object_id))
                     time.sleep(0.1)   # sometimes dms list gets collapsed if no delay
-                self.switch_channel(channel_id, channel_name, guild_id, guild_name, parent_hint=parent_hint)
+                self.switch_channel(channel_id, guild_id, parent_hint=parent_hint)
                 if tp:
                     self.update_extra_line("You're inside building. There is food here.")
 
@@ -3673,24 +3671,13 @@ class Endcord:
             else:
                 self.update_extra_line(f"Specified device not found: {device}")
 
-        elif cmd_type == 56:   # RENAME_FOLDER
-            folder_id = self.tree_metadata[tree_sel].get("id")
-            guild_folders_ids = [x["id"] for x in self.guild_folders]
-            if folder_id and folder_id in guild_folders_ids:
-                for folder in self.state["folder_names"]:
-                    if folder["id"] == folder_id:
-                        folder["name"] = cmd_args["name"]
-                        break
-                else:
-                    self.state["folder_names"].append({
-                        "id": folder_id,
-                        "name": cmd_args["name"],
-                    })
-                for num, folder in enumerate(self.state["folder_names"]):
-                    if folder["id"] not in guild_folders_ids:
-                        self.state["folder_names"].pop(num)
-                utils.save_json(self.state, f"state_{self.profiles["selected"]}.json")
-                self.update_tree()
+        elif cmd_type == 56:   # VOICE_OPEN_CHAT
+            if self.tree_metadata[tree_sel]["type"] == 2:
+                channel_id = self.tree_metadata[tree_sel]["id"]
+                guild_id = self.find_parents_from_tree(tree_sel)[0]
+                self.switch_channel(channel_id, guild_id, voice=False)
+            elif self.in_call and self.in_call["guild_id"]:
+                self.switch_channel(self.in_call["channel_id"], self.in_call["guild_id"], voice=False)
 
         elif cmd_type == 57:   # VIEW_EMOJI
             if cmd_args.get("name"):
@@ -3921,6 +3908,25 @@ class Endcord:
 
         # 80 - COPY_ATTACHMENT handled together with 4 - DOWNLOAD
 
+        elif cmd_type == 81:   # RENAME_FOLDER
+            folder_id = self.tree_metadata[tree_sel].get("id")
+            guild_folders_ids = [x["id"] for x in self.guild_folders]
+            if folder_id and folder_id in guild_folders_ids:
+                for folder in self.state["folder_names"]:
+                    if folder["id"] == folder_id:
+                        folder["name"] = cmd_args["name"]
+                        break
+                else:
+                    self.state["folder_names"].append({
+                        "id": folder_id,
+                        "name": cmd_args["name"],
+                    })
+                for num, folder in enumerate(self.state["folder_names"]):
+                    if folder["id"] not in guild_folders_ids:
+                        self.state["folder_names"].pop(num)
+                utils.save_json(self.state, f"state_{self.profiles["selected"]}.json")
+                self.update_tree()
+
         if success is None:
             self.gateway.set_offline()
             self.update_extra_line("Network error.")
@@ -4137,8 +4143,9 @@ class Endcord:
                     break
                 num += 1
         if channel_id:
-            channel_id, channel_name, guild_id, guild_name, parent_hint = self.find_parents_from_id(channel_id)
-            self.switch_channel(channel_id, channel_name, guild_id, guild_name, parent_hint=parent_hint)
+            channel_id, _, guild_id, _, parent_hint = self.find_parents_from_id(channel_id)
+            if channel_id:
+                self.switch_channel(channel_id, guild_id, parent_hint=parent_hint)
 
 
     def smart_paste(self):
@@ -7203,7 +7210,7 @@ class Endcord:
 
     def start_call(self, incoming=False, guild_id=None, channel_id=None, enable_input=True):
         """Start voice call"""
-        if not support_media and support_call:
+        if not (support_media and support_call):
             self.update_extra_line("Failed to start call: No media/call support.")
             return
 
@@ -7719,11 +7726,9 @@ class Endcord:
             guild_id = self.state["last_guild_id"]
             channel_id = self.state["last_channel_id"]
             channel_name = None
-            guild_name = None
             if guild_id:
                 for guild in self.guilds:
                     if guild["guild_id"] == guild_id:
-                        guild_name = guild["name"]
                         break
                 else:
                     guild = {"channels": []}
@@ -7737,7 +7742,7 @@ class Endcord:
                         channel_name = channel["name"]
                         break
             if channel_name:
-                self.switch_channel(channel_id, channel_name, guild_id, guild_name, preload=True, delay=True)
+                self.switch_channel(channel_id, guild_id, preload=True, delay=True)
                 self.tui.tree_select_active()
             else:
                 self.chat.insert(0, "Select channel to load messages")

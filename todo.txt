@@ -1,4 +1,6 @@
-Add voice channel chat
+Add internal option to add placeholder for image in chat
+Add internal option to add placeholder for custom emoji
+
 Fix sent audio is delayed and low quality
 Fix receiver audio mixer
 Add transmmitter audio mixer
@@ -22,10 +24,9 @@ Video, stage and stream calls
 Localization
 
 after fixing https://github.com/python/cpython/issues/119138
-    Add colors for status sign in selected and active dm in tree
-    Add red fg white bg color for selected and unread in tree
-    Add red fg gray bg color for active and unread in tree
-    Add status dot color to active and muted line in tree
+    Add colors for status sign in selected, muted and active dm in tree
+    Add red fg white bg color for selected + unread in tree
+    Add red fg gray bg color for active + unread in tree
     Show inline media in chat
 
 Extensions:

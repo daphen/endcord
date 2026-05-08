@@ -278,7 +278,7 @@ def search_emojis(all_emojis, premium, guild_id, query, safe_emoji=False, limit=
     # standard emoji
     if len(results) < limit:
         for key, data in utils.EMOJI_DATA.items():
-            # emoji.EMOJI_DATA = {emoji: {":emoji_name:", ":alias:"}...}
+            # utils.EMOJI_DATA = {emoji: {":emoji_name:", ":alias:"}...}
             if any((0x1F3FB <= ord(ch) <= 0x1F3FF) for ch in key):
                 continue   # skip variation emoji
             formatted = ""

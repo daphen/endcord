@@ -123,6 +123,8 @@
     Silence incoming call or cancel outgoing call.
 - `voice_list_call`  
     Show all call participants and their states in an updated list. Must be in the call to use this.
+- `voice_open_chat`  
+    Open voice call chat for selected voice channel. If none is selected then open for currently active voice call.  
 - `voice_set_volume_input`  
     Change volume for input devices in voice call. Set to 0 to mute. Value can be `0-200%`, above 100 is boost. Persisted across sessions.  
     `+` and `-` can be prepended to value so it will increment it - useful for binding this command to a key.  
