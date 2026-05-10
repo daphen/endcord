@@ -147,6 +147,8 @@ class Endcord:
         self.vim_mode = config["vim_mode"]
         self.notifications_pfp = config["notifications_pfp"]
         self.silence_threshold = config["call_silence_threshold"]
+        self.placeholder_emoji = False
+        self.placeholder_images = False
 
         if not self.external_editor or not shutil.which(self.external_editor):
             self.external_editor = os.environ.get("EDITOR", "nano")
@@ -266,7 +268,14 @@ class Endcord:
         self.tui.update_chat(self.chat, [[[self.colors[0]]]] * len(self.chat))
         self.tui.update_status_line(" CONNECTING")
         self.my_id = None   # will be taken from gateway in main()
-        self.formatter = formatter.ChatGenerator(self.config, self.colors, self.colors_formatted, self.my_id)
+        self.formatter = formatter.ChatGenerator(
+            self.config,
+            self.colors,
+            self.colors_formatted,
+            self.my_id,
+            self.placeholder_emoji,
+            self.placeholder_images,
+        )
         self.premium = None    # same
         self.my_user_data = None    # same
         self.channel_cache = []
@@ -1543,7 +1552,7 @@ class Endcord:
                     self.reset_states()
                     self.editing = message["id"]
                     self.add_to_store(self.active_channel["channel_id"], input_text)
-                    self.restore_input_text = (utils.demojize(message["content"]), "edit")
+                    self.restore_input_text = (utils.demojize(message["content"], safe=True), "edit")
                     self.update_status_line()
 
             # delete
@@ -2077,7 +2086,7 @@ class Endcord:
                 else:
                     self.restore_input_text = (input_text, "command")
 
-            # mouse double click on message
+            # double click on message
             elif action == 40:
                 self.restore_input_text = (input_text, "standard")
                 clicked_chat, mouse_x = self.tui.get_clicked_chat()
@@ -2117,27 +2126,27 @@ class Endcord:
                             ranges = chat_line_map[5]
                             if ranges[0]:   # url/embed
                                 for num, item in enumerate(ranges[0]):
-                                    if item[0] < mouse_x < item[1]:
+                                    if item[0] <= mouse_x < item[1]:
                                         clicked_type = 5
                                         clicked_id = item[2]
                             elif ranges[2]:   # custom emoji
                                 for num, item in enumerate(ranges[2]):
-                                    if item[0] < mouse_x < item[1]:
+                                    if item[0] <= mouse_x < item[1]:
                                         clicked_type = 7
                                         clicked_id = item[2]
                             elif ranges[3]:   # mention
                                 for num, item in enumerate(ranges[3]):
-                                    if item[0] < mouse_x < item[1]:
+                                    if item[0] <= mouse_x < item[1]:
                                         clicked_type = 8
                                         clicked_id = item[2]
                             elif ranges[4]:   # channel
                                 for num, item in enumerate(ranges[4]):
-                                    if item[0] < mouse_x < item[1]:
+                                    if item[0] <= mouse_x < item[1]:
                                         clicked_type = 9
                                         clicked_id = item[2]
                             if ranges[1]:   # spoiler (owerwries previous)
                                 for num, item in enumerate(ranges[1]):
-                                    if item[0] < mouse_x < item[1]:
+                                    if item[0] <= mouse_x < item[1]:
                                         clicked_type = 6
                                         clicked_id = item[2]
                         # execute
@@ -2203,7 +2212,7 @@ class Endcord:
                                 if message_id:
                                     self.go_to_message(message_id)
 
-            # mouse single click on extra line
+            # single click on extra line
             elif action == 48:
                 if self.extra_line == self.permanent_extra_line and not self.extra_window_open:
                     if self.in_call:
@@ -3864,7 +3873,7 @@ class Endcord:
             for guild in self.summaries:
                 for channel in guild["channels"]:
                     summaries_count += len(channel["summaries"])
-            pfps_count, pfps_size = utils.get_dir_size(os.path.expanduser(peripherals.cache_path), mb=True)
+            imgs_count, imgs_size = utils.get_dir_size(os.path.expanduser(peripherals.cache_path), mb=True)
             text = f"Run time: {formatter.format_seconds(int(time.time()) - self.start_time, nice=True)}\n"
             text += f"Gateway events/h: {gateway_events_per_h}\n"
             text += f"Gateway messages/h: {gateway_msg_per_h}\n"
@@ -3876,7 +3885,7 @@ class Endcord:
             text += f"  Cached members: {members_count}\n"
             text += f"  Deleted messages: {deleted_msg_count}\n"
             text += f"  Summaries: {summaries_count}\n"
-            text += f"  PFPs: {pfps_count} ({pfps_size} MB)\n"
+            text += f"  Image cache: {imgs_count} ({imgs_size} MB)\n"
             self.stop_assist(close=False)
             max_w = self.tui.get_dimensions()[2][1]
             extra_title, extra_body = formatter.generate_extra_window_text("Client stats:", text, max_w)
@@ -5863,6 +5872,7 @@ class Endcord:
         elif keep_selected is not None:
             self.tui.set_selected(-1, scroll=scroll, draw=False)   # return to bottom
 
+        self.execute_extensions_methods("on_chat_update", self.chat, self.chat_format, self.chat_map, cache=True)
         self.tui.update_chat(self.chat, self.chat_format)
 
 
@@ -7487,7 +7497,9 @@ class Endcord:
         # download pfp
         if self.notifications_pfp and avatar_id:
             # check if cached
-            cache_path = os.path.expanduser(peripherals.cache_path)
+            cache_path = os.path.join(os.path.expanduser(peripherals.cache_path), "pfp")
+            if not os.path.exists(cache_path):
+                os.makedirs(cache_path)
             for file_name in os.listdir(cache_path):
                 avatar_path = os.path.join(cache_path, file_name)
                 if os.path.isfile(avatar_path) and os.path.splitext(file_name)[0].strip("_round") == avatar_id:

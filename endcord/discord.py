@@ -36,6 +36,7 @@ DYN_DISCORD_CDN_HOST = "media.discordapp.net"
 DISCORD_EPOCH = 1420070400
 MAX_CONNECTION_POOL = 10
 MAX_CONNECTION_AGE = 55 * 30  # discord closes keepalive connection after ?? min
+CONNECTION_TIMEOUT = 2   # default value
 SEARCH_PARAMS = ("content", "channel_id", "author_id", "mentions", "has", "max_id", "min_id", "pinned", "offset")
 SEARCH_HAS_OPTS = ("link", "embed", "poll", "file", "video", "image", "sound", "sticker", "forward")
 PING_OPTIONS = ["all", "mentions", "nothing", "default"]   # must be list
@@ -187,7 +188,7 @@ class Discord():
         return None
 
 
-    def get_connection(self, host, port, timeout=10):
+    def get_connection(self, host, port, timeout=CONNECTION_TIMEOUT):
         """Get connection object and handle proxying"""
         if sys.platform == "darwin":
             import certifi
@@ -216,7 +217,7 @@ class Discord():
         return connection
 
 
-    def request(self, method, path, body=None, headers=None, timeout=5, exit_on_error=False):
+    def request(self, method, path, body=None, headers=None, timeout=CONNECTION_TIMEOUT, exit_on_error=False):
         """Perform discord api request; try to use existing keepalive connection, or create new one; handle threading by using connection pool; and recreate connections if server timeout them after 55 minutes"""
         self.total_requests += 1
         entry = None
@@ -1721,14 +1722,16 @@ class Discord():
         return False
 
 
-    def get_emoji(self, emoji_id, size=None):
+    def get_emoji(self, emoji_id, size=None, img_type="webp", cache=peripherals.temp_path):
         """Download image for specified custom emoji"""
-        destination = os.path.join(os.path.expanduser(peripherals.temp_path), f"{emoji_id}.webp")
+        destination = os.path.join(os.path.expanduser(cache), f"{emoji_id}.{img_type}")
+        if not os.path.exists(os.path.dirname(destination)):
+            os.makedirs(os.path.dirname(destination))
         if os.path.exists(destination):
             return destination
 
         message_data = None
-        url = f"/emojis/{emoji_id}.webp"
+        url = f"/emojis/{emoji_id}.{img_type}"
         if size:
             url = url + f"?size={size}"
         header = {

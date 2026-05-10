@@ -460,7 +460,7 @@ def shift_formats(formats, index, diff, skip=1):
     return new_formats
 
 
-def replace_discord_emoji(text, *ranges_lists):
+def replace_discord_emoji(text, placeholder=None, *ranges_lists):
     """
     Transform emoji strings into nicer looking ones:
     `some text <:emoji_name:emoji_id> more text` --> `some text :emoji_name: more text`
@@ -472,7 +472,10 @@ def replace_discord_emoji(text, *ranges_lists):
     for match in re.finditer(match_d_emoji, text):
         start, end = match.span()
         result.append(text[last_pos:start])
-        new_text = f":{match.group(2)}:"
+        if placeholder:
+            new_text = placeholder
+        else:
+            new_text = f":{match.group(2)}:"
         result.append(new_text)
 
         new_start = start + offset
@@ -1014,7 +1017,7 @@ def format_poll(poll):
 class ChatGenerator:
     """Chat generator class"""
 
-    def __init__(self, config, colors, colors_formatted, my_id):
+    def __init__(self, config, colors, colors_formatted, my_id, placeholder_emoji, placeholder_images):
         # load from config
         self.format_message = config["format_message"]
         self.format_newline = config["format_newline"]
@@ -1039,6 +1042,8 @@ class ChatGenerator:
         self.trim_embed_url_size = max(config["trim_embed_url_size"], 20)
         self.dynamic_name_len = config["dynamic_name_len"]
         self.limit_chat_buffer = config["limit_chat_buffer"]
+        self.placeholder_emoji = "▒▒" if placeholder_emoji else None
+        self.placeholder_images = placeholder_images
 
         # load colors
         self.color_default = [colors[0]]
@@ -1154,7 +1159,7 @@ class ChatGenerator:
             format_reactions (reactions added to main message)
         chat = [one_message_line, ...]
         chat_format = [[[default_color_id], [color_id, start, end], ...], ...]
-        chat_map = [(msg_num, username:(st, end), is_reply, reactions:((st, end), ...), date:(st, end), ranges), ...]
+        chat_map = [(msg_num, username:(st, end), is_reply, reactions:((st, end, emji_id), ...), date:(st, end), ranges, is_wide), ...]
             ranges = (url:(st, end, index), spoiler:(st, end, index), emoji:(st, end, id), mentions:(st, end, id), channels:(st, end, id))
         change_id hints that only one specific message got changed, change_type hints type of that change: 1 - append, 2 - delete, 3 - edit.
         """
@@ -1454,18 +1459,19 @@ class ChatGenerator:
                 global_name = get_global_name(ref_message, self.use_nick)
                 reply_embeds = ref_message["embeds"].copy()
                 content = ""
+                emoji_ranges = []
                 if ref_message["content"]:
                     content = ref_message["content"]
                     if self.emoji_as_text:
                         content = utils.demojize(content)
                     content, _ = replace_escaped_md(content)
                     content = replace_spoilers(content)
-                    content, _ = replace_discord_emoji(content)
                     content, _ = replace_mentions(content, ref_message["mentions"], global_name=self.use_global_name, use_nick=self.use_nick)
                     content, _ = replace_roles(content, roles)
                     content = replace_discord_url(content)
                     content, _ = replace_channels(content, channels)
                     content, _ = replace_timestamps(content, self.convert_timezone)
+                    content, emoji_ranges = replace_discord_emoji(content, self.placeholder_emoji)
                 if reply_embeds:
                     for embed in reply_embeds:
                         embed_url = embed["url"]
@@ -1485,6 +1491,7 @@ class ChatGenerator:
                 reply_line = lazy_replace(self.format_reply, "%username", lambda: normalize_string(ref_message["username"], self.dyn_limit_username, emoji_safe=False, fill=not(self.dynamic_name_len)))
                 reply_line, wide_shift = lazy_replace_args(reply_line, "%global_name", lambda: normalize_string_count(global_name, self.dyn_limit_username, fill=not(self.dynamic_name_len)))
                 reply_line = lazy_replace(reply_line, "%timestamp", lambda: generate_timestamp(ref_message["timestamp"], self.format_timestamp, self.convert_timezone))
+                pre_content_len = len(reply_line.split("%content")[0])
                 reply_line = lazy_replace(reply_line, "%content", lambda: content.replace("\r", " ").replace("\n", " "))
                 wide_shift = -wide_shift
             else:
@@ -1494,6 +1501,8 @@ class ChatGenerator:
                 reply_line = reply_line.replace("%timestamp", self.placeholder_timestamp)
                 reply_line = lazy_replace(reply_line, "%content", lambda: ref_message["content"].replace("\r", "").replace("\n", ""))
                 wide_shift = 0
+                emoji_ranges = []
+                pre_content_len = 0
             reply_line, wide = normalize_string_count(reply_line, max_length, dots=True)
             if self.dynamic_name_len:
                 if self.dynamic_name_len == 1:
@@ -1512,7 +1521,9 @@ class ChatGenerator:
                 chat_format.append(shift_formats(self.color_reply, self.pre_name_len_reply, name_len - self.limit_username))
             else:
                 chat_format.append(shift_formats(self.color_reply, self.pre_name_len_reply, wide_shift))
-            chat_map.append((num, None, True, None, None, None, bool(wide)))
+            shift_ranges_all(pre_content_len, emoji_ranges)
+            this_line_ranges = (None, None, emoji_ranges, None, None)
+            chat_map.append((num, None, True, None, None, this_line_ranges, bool(wide)))
 
         # bot interaction
         elif message["interaction"]:
@@ -1564,7 +1575,7 @@ class ChatGenerator:
             content = message["content"]
             if self.emoji_as_text:
                 content = utils.demojize(content)
-            content, emoji_ranges = replace_discord_emoji(content)
+            content, emoji_ranges = replace_discord_emoji(content, self.placeholder_emoji)
             content, mention_ranges = replace_mentions(content, message["mentions"], emoji_ranges, global_name=self.use_global_name, use_nick=self.use_nick)
             content, role_ranges = replace_roles(content, roles, emoji_ranges, mention_ranges)
             mention_ranges += role_ranges
@@ -1949,10 +1960,14 @@ class ChatGenerator:
         # reactions
         if message["reactions"]:
             reactions = []
+            emoji_ranges = []
             for reaction in message["reactions"]:
-                emoji_str = reaction["emoji"]
-                if self.emoji_as_text:
+                if self.placeholder_emoji and reaction["emoji_id"]:
+                    emoji_str = self.placeholder_emoji
+                elif self.emoji_as_text and not reaction["emoji_id"]:
                     emoji_str = emoji_name(emoji_str)
+                else:
+                    emoji_str = reaction["emoji"]
                 my_reaction = ""
                 if reaction["me"]:
                     my_reaction = "*"
@@ -1975,7 +1990,8 @@ class ChatGenerator:
             offset = 0
             for num_r, reaction in enumerate(reactions):
                 wide = not self.emoji_as_text and len(message["reactions"][num_r]["emoji"]) == 1   # emoji reaction will be one character
-                reactions_map.append([self.pre_reaction_len + offset, self.pre_reaction_len + len(reaction) + wide + offset])
+                emoji_id = message["reactions"][num_r]["emoji_id"]
+                reactions_map.append([self.pre_reaction_len + offset+1, self.pre_reaction_len + len(reaction) + wide + offset, emoji_id])
                 offset += len(self.reactions_separator) + len(reaction) + wide
             chat_map.append((num, None, False, reactions_map, None, None, bool(wide)))
 
@@ -2720,7 +2736,10 @@ def generate_extra_window_search_ext(extensions, max_len):
     body = []
 
     for extension in extensions:
-        body.append(normalize_string(extension[1] +  " - " + str(extension[2]), max_len, emoji_safe=True, dots=True, fill=False))
+        official = " (official)" if extension[3] else ""
+        description = str(extension[2]).replace("An extension for endcord discord TUI client, that ", "")
+        description = description.capitalize()
+        body.append(normalize_string(extension[1] + official +  " - " + description, max_len, emoji_safe=True, dots=True, fill=False))
 
     return title_line, body
 

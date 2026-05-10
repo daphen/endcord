@@ -370,6 +370,19 @@ def emojize(text):
     return re.sub(match_emoji, replace_emoji, text)
 
 
+def is_potential_emoji(cluster):
+    """Check if any character in the cluster is emoji"""
+    for character in cluster:
+        ch = ord(character)
+        return (
+            (0x1F300 <= ch <= 0x1F9FF) or
+            (0x2600 <= ch <= 0x27BF) or
+            (0x2300 <= ch <= 0x23FF) or
+            (0x2B00 <= ch <= 0x2BFF)
+        )
+    return False
+
+
 SKIN_TONES = {0x1F3FB, 0x1F3FC, 0x1F3FD, 0x1F3FE, 0x1F3FF}
 
 
@@ -409,7 +422,7 @@ def next_emoji_cluster(text, i):
     return "".join(cluster), i
 
 
-def demojize(text):
+def demojize(text, safe=False):
     """Convert all emojis in given string to their shortcodes"""
     result = []
     i = 0
@@ -425,6 +438,8 @@ def demojize(text):
         emoji = EMOJI_DATA.get(cluster)
         if emoji:
             result.append(min(emoji, key=len))
+        elif safe and is_potential_emoji(cluster):
+            result.append("▒")
         else:
             result.append(cluster)
     return "".join(result)

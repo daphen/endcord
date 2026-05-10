@@ -76,7 +76,7 @@ Arguments are chained between extensions having same named method, extensions ar
 Method names can be searched in `./endcord/app.py` code to see where they are executed.  
 
 ### List of extension access points names and their locations in endcord code:
-- `__init__` - on end of app class init
+- `__init__` - at the end of app class init
 - `on_main_start` - just before main loop starts
 - `on_main_loop` - first in main loop
 - `on_message_event` - in main loop, when message event is received, before event is processed; has event at input and output; only "relevant" messages are passed here
@@ -85,8 +85,10 @@ Method names can be searched in `./endcord/app.py` code to see where they are ex
 - `on_reconnect` - near end of reconnect, before UI is updated
 - `on_resize` - in main loop, when screen geometry change is detected, before all other resize actions and after self.chat_dim is updated
 - `on_escape_key` - near end escape key handling in wait_input
-- `on_start_call` - on end of start_call
-- `on_leave_call` - on end of leave_call
+- `on_chat_update` - at the end of update_chat in app.py, but before chat is updated in tui.py, arguments: chat, chat_format, chat_map
+- `on_chat_draw` - at the end of draw_chat method in tui.py
+- `on_start_call` - at the end of start_call
+- `on_leave_call` - at the end of leave_call
 - `on_call_gateway_event` - in process_call_voice_gateway_events, before event is processed, has event at input and output
 - `on_call_voice_gateway_event` - in process_call_voice_gateway_events, before event is processed, has event at input and output
 - `on_execute_command` - at the start of execute_command, ran only of there are no matched builtin commands

@@ -1981,6 +1981,8 @@ class Gateway():
         Try to resume discord gateway session on url provided by Discord in READY event.
         Return gateway response code, 9 means resumming has failed
         """
+        if not self.ws:
+            return 9
         self.ws.close(timeout=0)   # this will stop receiver
         time.sleep(1)   # so receiver ends before opening new socket
         reset_inflator()   # otherwise decompression wont work

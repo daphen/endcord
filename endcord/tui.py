@@ -415,6 +415,46 @@ class TUI():
         self.init_chainable()
 
 
+    def execute_extensions_methods(self, method_name, *args, cache=False):
+        """Execute specific method for each extension if extension has this method, and chain them"""
+        if not self.extensions:
+            return args
+
+        # try to load from cache (improves performance with many extensions)
+        if cache:
+            for extension_point in self.extension_cache:
+                data = args
+                if extension_point[0] == method_name:
+                    for method in extension_point[1]:
+                        result = method(*data)
+                        if result is not None:
+                            if not isinstance(result, tuple):
+                                result = (result, )
+                            data = result
+                    if data is not None:
+                        return data
+                    return args
+
+        # try to load method from extensions and add to cache
+        methods = []
+        data = args
+        for extension in self.extensions:
+            method = getattr(extension, method_name, None)
+            if callable(method):
+                if cache:
+                    methods.append(method)
+                result = method(*data)
+                if result is not None:
+                    if not isinstance(result, tuple):
+                        result = (result, )
+                    data = result
+        if cache:
+            self.extension_cache.append((method_name, methods))
+        if data is not None:
+            return data
+        return args
+
+
     def execute_extensions_method_first(self, method_name, *args, cache=False):
         """Execute specific method for each extension if extension has this method, without chaining, stop on first run extension"""
         if not self.extensions:
@@ -1347,6 +1387,7 @@ class TUI():
             except curses.error:
                 # exception will happen when window is resized to smaller w dimensions
                 self.resize()
+        self.execute_extensions_methods("on_chat_draw", cache=True)
 
 
     def set_wide(self, chat_map):

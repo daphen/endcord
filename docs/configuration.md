@@ -349,6 +349,16 @@ Every next list has additional `start` and `end`- indexes on a line where color 
     Color for selected line in the chat.
 - `color_chat_separator = [242, -1, "i"]`  
     Color for date separator line in the chat.
+- `color_chat_standout = [153, 234]`  
+    Color for chat elements that should standout, like `@mentons`, `#channels`, timestamps, custom emoji.
+- `color_chat_edited = [241, -1]`  
+    Color for `edited_string`.
+- `color_chat_url = [153, -1, "u"]`  
+    Color for urls in message content and embeds.
+- `color_chat_spoiler = [245, -1]`  
+    Color for spoilers in message.
+- `color_chat_code = [250, 233]`  
+    Color for code snippets and blocks.
 - `color_status_line = [233, 255]`  
     Color for status line.
 - `color_extra_line = [233, 245]`  
@@ -385,16 +395,6 @@ Every next list has additional `start` and `end`- indexes on a line where color 
     Color format for message app interaction string. Corresponding to `format_interaction`.
 - `color_format_forum = [[-1, -1], [242, -2, 0, 0, 12], [25, -2, 0, 15, 20]]`  
     Color format for threads in forum. Corresponding to `format_forum`.
-- `color_chat_standout = [153, 234]`  
-    Color for chat elements that should standout, like `@mentons`, `#channels`, timestamps, custom emoji.
-- `color_chat_edited = [241, -1]`  
-    Color for `edited_string`.
-- `color_chat_url = [153, -1, "u"]`  
-    Color for urls in message content and embeds.
-- `color_chat_spoiler = [245, -1]`  
-    Color for spoilers in message.
-- `color_chat_code = [250, 233]`  
-    Color for code snippets and blocks.
 - `media_color_bg = -1`  
     Single color value for background color when showing media.
 - `media_bar_ch = "━"`  
