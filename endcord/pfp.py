@@ -32,6 +32,11 @@ except ImportError:
 # the header row + first content row at most font sizes.
 PFP_COLS = 5
 PFP_ROWS = 2
+# Inline custom emoji size — small enough not to disrupt line height.
+EMOJI_COLS = 2
+EMOJI_ROWS = 1
+# Pixel size to request for emoji from the CDN.
+EMOJI_SIZE_PX = 48
 # Pixel size to ask Discord for. Anything >= cell-pixels * dimensions works.
 PFP_SIZE_PX = 64
 # Kitty image IDs are 32-bit. Start at a high offset so we don't clash
@@ -201,6 +206,73 @@ class PfpRenderer:
             self._transmitted.clear()
             self._placed.clear()
             self._next_id = KITTY_ID_BASE
+
+    def _emoji_path(self, emoji_id):
+        """Download + convert a custom emoji to a square PNG. Returns
+        local path or None on failure.
+        """
+        png_name = f"emoji_{emoji_id}.png"
+        png_path = os.path.join(os.path.expanduser(self.cache_path), png_name)
+        if os.path.isfile(png_path):
+            return png_path
+        webp_path = self.discord.get_emoji(emoji_id, size=EMOJI_SIZE_PX)
+        if not webp_path or not os.path.isfile(webp_path):
+            return None
+        try:
+            with Image.open(webp_path) as im:
+                im = im.convert("RGBA").resize(
+                    (EMOJI_SIZE_PX, EMOJI_SIZE_PX), Image.LANCZOS,
+                )
+                im.save(png_path, format="PNG")
+        except Exception as e:
+            logger.debug(f"emoji convert failed for {emoji_id}: {e}")
+            return None
+        return png_path
+
+    def _ensure_emoji_transmitted(self, emoji_id):
+        """Transmit a custom-emoji image to Kitty if not already there.
+
+        Cache key is the emoji_id (a numeric string) — distinct from
+        avatar hashes so the two namespaces don't collide.
+        """
+        key = f"emoji:{emoji_id}"
+        if key in self._transmitted:
+            return self._transmitted[key]
+        if key in self._fetching:
+            return None
+        self._fetching.add(key)
+        try:
+            path = self._emoji_path(emoji_id)
+            if not path:
+                return None
+            with self._lock:
+                kid = self._next_id
+                self._next_id += 1
+                self._transmitted[key] = kid
+            with open(path, "rb") as f:
+                data = f.read()
+            ctrl = f"a=t,f=100,i={kid},q=2"
+            _send(_chunk_payload(data, ctrl))
+            return kid
+        finally:
+            self._fetching.discard(key)
+
+    def place_emoji(self, emoji_id, row, col, cols=EMOJI_COLS, rows=EMOJI_ROWS):
+        """Place a custom emoji at terminal cell (row, col)."""
+        if not self.enabled or not emoji_id:
+            return
+        kid = self._ensure_emoji_transmitted(emoji_id)
+        if kid is None:
+            return
+        with self._lock:
+            pid = self._next_placement_id
+            self._next_placement_id += 1
+        cup = f"\x1b[{row + 1};{col + 1}H".encode("ascii")
+        place = (
+            f"\x1b_Ga=p,i={kid},p={pid},c={cols},r={rows},C=1,q=2\x1b\\"
+        ).encode("ascii")
+        _send(cup + place)
+        self._placed.add(kid)
 
     def place(self, user_id, avatar_id, row, col):
         """Place this user's avatar at terminal cell (row, col).

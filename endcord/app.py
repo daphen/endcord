@@ -274,12 +274,24 @@ class Endcord:
         self.tui.update_chat(self.chat, [[[self.colors[0]]]] * len(self.chat))
         self.tui.update_status_line(" CONNECTING")
         self.my_id = None   # will be taken from gateway in main()
-        # If we're going to draw inline avatars, reserve 7 leading cols on
-        # every chat line: 1 gutter + 5-cell avatar + 1 space gap.
+        # If we're going to draw inline avatars, reserve 6 leading cols on
+        # every chat line: 1 gutter + 5-cell avatar. The message text
+        # starts directly after the avatar.
         if self.pfp_renderer.enabled:
-            pad = "       "
+            pad = "      "
+            # Approximate width of the header before <name>: "[12:05] " = 8
+            # for the typical %H:%M timestamp. Aligning body content here
+            # makes a multi-line message read like indented prose under
+            # the speaker's name instead of butting against the separator.
+            header_offset = 8
             self.config["format_message"] = pad + self.config["format_message"].replace("\n", "\n" + pad)
-            self.config["format_newline"] = pad + self.config["format_newline"]
+            fmt_nl = self.config["format_newline"]
+            if "%content" in fmt_nl:
+                body_prefix_len = len(fmt_nl.split("%content", 1)[0])
+                extra = max(header_offset - body_prefix_len, 0)
+                if extra:
+                    fmt_nl = fmt_nl.replace("%content", " " * extra + "%content", 1)
+            self.config["format_newline"] = pad + fmt_nl
             self.config["format_reply"] = pad + self.config["format_reply"]
             self.config["format_reactions"] = pad + self.config["format_reactions"]
             self.config["format_interaction"] = pad + self.config["format_interaction"]
@@ -5983,6 +5995,7 @@ class Endcord:
         )
         self.tui.set_wide(self.chat_map)
         self.tui.set_pfp_lines(self._build_pfp_lines())
+        self.tui.set_emoji_lines(self._build_emoji_lines())
 
         if keep_selected:
             selected_msg = selected_msg + change_amount
@@ -6383,6 +6396,25 @@ class Endcord:
                     elif second_digit == 3:
                         tray_state = 1   # unread
             self.tui.set_tray_icon(tray_state)
+
+
+    def _build_emoji_lines(self):
+        """Return a list parallel to chat_buffer where each entry is a
+        list of (col, emoji_id) tuples for the custom emojis on that
+        line. Empty list for lines with no emojis.
+
+        chat_map[line] is a 7-tuple where index 5 is the per-line
+        `ranges` tuple. Inside ranges, index 2 is `emoji_ranges` —
+        a list of (start, end, emoji_id).
+        """
+        out = []
+        for line in self.chat_map:
+            if line and line[5] and len(line[5]) > 2 and line[5][2]:
+                emoji_ranges = line[5][2]
+                out.append([(r[0], r[2]) for r in emoji_ranges])
+            else:
+                out.append([])
+        return out
 
 
     def _build_pfp_lines(self):

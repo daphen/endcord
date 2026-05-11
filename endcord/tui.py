@@ -313,10 +313,13 @@ class TUI():
         # Inline-PFP state. Wired up later via set_pfp_renderer().
         # pfp_lines: parallel to chat_buffer. None for non-header lines,
         # (user_id, avatar_id) for lines where we want to draw an avatar.
+        # emoji_lines: parallel to chat_buffer. List of (col, emoji_id)
+        #   tuples per line, or [] when the line has no custom emojis.
         # _pfp_dirty: set by draw_chat, cleared by screen_update after it
         # has re-placed the avatars (which must happen AFTER doupdate).
         self.pfp_renderer = None
         self.pfp_lines = []
+        self.emoji_lines = []
         self._pfp_dirty = False
         self.tree = []
         self.tree_format = []
@@ -1483,18 +1486,33 @@ class TUI():
         self.pfp_lines = pfp_lines
 
 
+    def set_emoji_lines(self, emoji_lines):
+        """Update the per-line custom-emoji placement map.
+
+        Each entry is a list of (col, emoji_id) tuples giving the in-line
+        column offset of each custom emoji on that line.
+        """
+        self.emoji_lines = emoji_lines
+
+
     def place_inline_pfps(self):
         """Render avatars for currently visible header lines.
 
-        Called from draw_chat after curses has produced its output, so
-        Kitty placements layer on top of the cell content. The chat
-        formatter is responsible for leaving leading whitespace in
-        header / newline rows so avatars don't cover text.
+        Called from screen_update after curses.doupdate. The CUP and
+        place commands move the terminal cursor; we save/restore it
+        around the batch so the input-line cursor isn't left parked in
+        the chat region (which made user keypresses appear to vanish).
         """
         if not self.pfp_renderer or not self.pfp_renderer.enabled:
             return
         if not self.pfp_lines or self.disable_drawing:
             return
+        # DECSC save cursor (\e7), DECRC restore (\e8). Doing this here
+        # rather than per-placement keeps the wire output compact.
+        try:
+            os.write(sys.stdout.fileno(), b"\x1b7")
+        except OSError:
+            pass
         self.pfp_renderer.clear_placements()
         chat_y, chat_x = self.win_chat.getbegyx()
         chat_h = self.chat_hw[0]
@@ -1515,6 +1533,22 @@ class TUI():
             # +1 col puts a small gutter between the chat's left border
             # `│` and the avatar.
             self.pfp_renderer.place(user_id, avatar_id, row, chat_x + 1)
+        # Inline custom emoji — placed at their in-line column for each
+        # visible line.
+        if self.emoji_lines:
+            for i in range(self.chat_index, min(self.chat_index + chat_h, len(self.emoji_lines))):
+                row = chat_y + chat_h - 1 - (i - self.chat_index)
+                if row < chat_y:
+                    continue
+                for col_off, emoji_id in self.emoji_lines[i]:
+                    abs_col = chat_x + col_off
+                    if abs_col < chat_x or abs_col >= chat_x + self.chat_hw[1]:
+                        continue
+                    self.pfp_renderer.place_emoji(emoji_id, row, abs_col)
+        try:
+            os.write(sys.stdout.fileno(), b"\x1b8")
+        except OSError:
+            pass
 
 
     def clear_chat_wide(self, wait=True):
