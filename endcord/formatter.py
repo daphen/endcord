@@ -1020,6 +1020,7 @@ class ChatGenerator:
     def __init__(self, config, colors, colors_formatted, my_id, placeholder_emoji, placeholder_images):
         # load from config
         self.format_message = config["format_message"]
+        self.format_message_grouped = config["format_message_grouped"]
         self.format_newline = config["format_newline"]
         self.format_reply = config["format_reply"]
         self.format_interaction = config["format_interaction"]
@@ -1038,11 +1039,12 @@ class ChatGenerator:
         self.format_date = config["format_date"]
         self.emoji_as_text = config["emoji_as_text"]
         self.message_spacing = config["message_spacing"]
+        self.message_grouping = config["message_grouping"]
         self.quote_character = config["quote_character"]
         self.trim_embed_url_size = max(config["trim_embed_url_size"], 20)
         self.dynamic_name_len = config["dynamic_name_len"]
         self.limit_chat_buffer = config["limit_chat_buffer"]
-        self.placeholder_emoji = "▒▒" if placeholder_emoji else None
+        self.placeholder_emoji = "  " if placeholder_emoji else None
         self.placeholder_images = placeholder_images
 
         # load colors
@@ -1053,24 +1055,26 @@ class ChatGenerator:
         self.color_separator = [colors[5]]
         self.color_code = colors[6]
         self.color_standout = colors[7]
-        self.color_chat_edited = colors_formatted[5][0]
-        self.color_mention_chat_edited = colors_formatted[14][0]
-        self.color_chat_url = colors_formatted[6][0][0]
-        self.color_mention_chat_url = colors_formatted[15][0][0]
-        self.color_spoiler = colors_formatted[7][0][0]
-        self.color_mention_spoiler = colors_formatted[16][0][0]
+        self.color_chat_edited = colors_formatted[6][0]
+        self.color_chat_url = colors_formatted[7][0][0]
+        self.color_spoiler = colors_formatted[8][0][0]
+        self.color_mention_chat_edited = colors_formatted[16][0]
+        self.color_mention_chat_url = colors_formatted[17][0][0]
+        self.color_mention_spoiler = colors_formatted[18][0][0]
 
         # load formatted colors: [[id], [id, start, end]...]
         self.color_message = colors_formatted[0]
-        self.color_newline = colors_formatted[1]
-        self.color_reply = colors_formatted[2]
-        self.color_reactions = colors_formatted[3]
-        self.color_interaction = colors_formatted[4]
-        self.color_mention_message = colors_formatted[9]
-        self.color_mention_newline = colors_formatted[10]
-        self.color_mention_reply = colors_formatted[11]
-        self.color_mention_reactions = colors_formatted[12]
-        self.color_mention_interaction = colors_formatted[13]
+        self.color_message_grouped = colors_formatted[1]
+        self.color_newline = colors_formatted[2]
+        self.color_reply = colors_formatted[3]
+        self.color_reactions = colors_formatted[4]
+        self.color_interaction = colors_formatted[5]
+        self.color_mention_message = colors_formatted[10]
+        self.color_mention_message_grouped = colors_formatted[11]
+        self.color_mention_newline = colors_formatted[12]
+        self.color_mention_reply = colors_formatted[13]
+        self.color_mention_reactions = colors_formatted[14]
+        self.color_mention_interaction = colors_formatted[15]
 
         # other
         self.use_global_name = "%global_name" in self.format_message
@@ -1395,6 +1399,7 @@ class ChatGenerator:
                 chat_map.append(None)
                 return None, None, None   # to not break message-to-chat conversion
 
+        group = False
         if next_msg:
             # unread message separator
             if not self.have_unseen_messages_line and self.date_separator and last_seen_msg and (num == num_messages-1 or (int(next_msg["id"]) <= int(last_seen_msg))):
@@ -1435,11 +1440,14 @@ class ChatGenerator:
                     chat_format.append([color_base])
                     chat_map.append(None)
 
-            # empty separator between messages not from same sender of after period of time
-            elif self.message_spacing and (message["user_id"] != next_msg["user_id"] or unix_from_snowflake(message["id"]) - unix_from_snowflake(next_msg["id"]) > SPLIT_AFTER_TIME):
+            # empty separator between messages not from same sender of after period of time and if message has reply or interaction
+            elif message["referenced_message"] or message["interaction"] or (self.message_spacing and (message["user_id"] != next_msg["user_id"] or unix_from_snowflake(message["id"]) - unix_from_snowflake(next_msg["id"]) > SPLIT_AFTER_TIME)):
+                group = False
                 chat.append(" " * max_length)
                 chat_format.append([color_base])
                 chat_map.append(None)
+            else:
+                group = self.message_grouping
 
         # replied message line
         if message["referenced_message"]:
@@ -1547,7 +1555,12 @@ class ChatGenerator:
 
         # main message
         global_name = get_global_name(message, self.use_nick) if self.use_global_name else ""
-        if self.dynamic_name_len:
+        if group:
+            placeholder_message = self.format_message_grouped.replace("%timestamp", self.placeholder_timestamp).replace("%edited", "").split("%content")[0]
+            pre_content_len = len(placeholder_message)
+            name_len = 0
+            end_name = 0
+        elif self.dynamic_name_len:
             if self.dynamic_name_len == 1:
                 name_len = len(message["username"][:self.dyn_limit_username])
             else:
@@ -1560,12 +1573,12 @@ class ChatGenerator:
                 .replace("%edited", "")
                 .replace("%app", "")
             ).split("%content")[0]
-            pre_content_len = self.default_pre_content_len = len(placeholder_message)
+            pre_content_len = len(placeholder_message)
         else:
             pre_content_len = self.default_pre_content_len
             name_len = self.limit_username
             end_name = self.end_name
-        if self.edited_before_content and edited:
+        if self.edited_before_content and edited and not group:
             pre_content_len += self.len_edited
         quote = False
         content = ""
@@ -1631,7 +1644,13 @@ class ChatGenerator:
             app_string = self.app_string_format.replace("%app", "Webhook")
         else:
             app_string = None
-        message_line = lazy_replace(self.format_message, "%username", lambda: normalize_string(message["username"], self.dyn_limit_username, emoji_safe=False, fill=not(self.dynamic_name_len)))
+        message_line = lazy_replace(
+            self.format_message_grouped if group else self.format_message,
+            "%username",
+            lambda: normalize_string(message["username"],
+            self.dyn_limit_username, emoji_safe=False,
+            fill=not(self.dynamic_name_len)),
+        )
         message_line, wide_shift = lazy_replace_args(message_line, "%global_name", lambda: normalize_string_count(global_name, self.dyn_limit_username, fill=not(self.dynamic_name_len)))
         message_line = lazy_replace(message_line, "%timestamp", lambda: generate_timestamp(message["timestamp"], self.format_timestamp, self.convert_timezone))
         message_line = message_line.replace("%edited", self.edited_string if edited else "")
@@ -1685,7 +1704,7 @@ class ChatGenerator:
             )
 
         # find all markdown and correct format indexes
-        message_line, md_format, md_indexes = format_md_all(message_line, self.default_pre_content_len, chain(code_snippets, code_blocks, urls))
+        message_line, md_format, md_indexes = format_md_all(message_line, pre_content_len, chain(code_snippets, code_blocks, urls))
         if md_indexes:
             move_by_indexes(
                 md_indexes,
@@ -1789,14 +1808,17 @@ class ChatGenerator:
         mentions_this_line = ranges_multiline_one_line(mention_ranges, newline_index+1, 0, quote)
         channels_this_line = ranges_multiline_one_line(channel_ranges, newline_index+1, 0, quote)
         this_line_ranges = (urls_this_line, spoilers_this_line, emoji_this_line, mentions_this_line, channels_this_line)
-        chat_map.append((num, (self.pre_name_len, end_name), False, None, self.timestamp_range, this_line_ranges, bool(wide)))
+        chat_map.append((num, (self.pre_name_len, end_name), False, None, None if group else self.timestamp_range, this_line_ranges, bool(wide)))
 
         # formatting
         len_message_line = len(message_line)
         if disable_formatting:
             chat_format.append([color_base])
         elif mentioned:
-            format_line = self.color_mention_message[:]
+            if group:
+                format_line = self.color_mention_message_grouped[:]
+            else:
+                format_line = self.color_mention_message[:]
             if self.dynamic_name_len:
                 format_line = shift_formats(format_line, self.pre_name_len+1, name_len - self.limit_username)
             else:
@@ -1810,13 +1832,16 @@ class ChatGenerator:
             if alt_role_color:
                 format_line.append([alt_role_color, self.pre_name_len + bool(wide_shift), end_name])
             if edited:
-                if self.edited_before_content:
+                if self.edited_before_content and not group:
                     format_line.append([*self.color_mention_chat_edited, self.pre_edited_len + (name_len - self.limit_username), self.pre_edited_len + (name_len - self.limit_username) + self.len_edited])
                 elif edited and not next_line:
                     format_line.append(self.color_mention_chat_edited + [len_message_line - self.len_edited, len_message_line])
             chat_format.append(format_line)
         else:
-            format_line = self.color_message[:]
+            if group:
+                format_line = self.color_message_grouped[:]
+            else:
+                format_line = self.color_message[:]
             if self.dynamic_name_len:
                 format_line = shift_formats(format_line, self.pre_name_len+1, name_len - self.limit_username)
             else:
@@ -1830,7 +1855,7 @@ class ChatGenerator:
             if role_color:
                 format_line.append([role_color, self.pre_name_len + bool(wide_shift), end_name])
             if edited:
-                if self.edited_before_content:
+                if self.edited_before_content and not group:
                     format_line.append([*self.color_chat_edited, self.pre_edited_len + (name_len - self.limit_username), self.pre_edited_len + (name_len - self.limit_username) + self.len_edited])
                 elif edited and not next_line:
                     format_line.append([*self.color_chat_edited, len_message_line - self.len_edited, len_message_line])
@@ -1941,7 +1966,7 @@ class ChatGenerator:
                 format_line += format_multiline_one_line(standout_ranges, len_new_line, self.newline_len, self.color_standout, this_quote)
                 format_line += code_block_format
                 format_line += format_spoilers
-                if edited and not next_line and not self.edited_before_content:
+                if edited and not next_line and not (self.edited_before_content and not group):
                     format_line.append(self.color_mention_chat_edited + [len_new_line - self.len_edited, len_new_line])
                 chat_format.append(format_line)
             else:
@@ -1952,7 +1977,7 @@ class ChatGenerator:
                 format_line += format_multiline_one_line(standout_ranges, len_new_line, self.newline_len, self.color_standout, this_quote)
                 format_line += code_block_format
                 format_line += format_spoilers
-                if edited and not next_line and not self.edited_before_content:
+                if edited and not next_line and not (self.edited_before_content and not group):
                     format_line.append([*self.color_chat_edited, len_new_line - self.len_edited, len_new_line])
                 chat_format.append(format_line)
             line_num += 1
@@ -2751,7 +2776,7 @@ def generate_extra_window_text(title_text, body_text, max_len):
     return title_line, body
 
 
-def generate_extra_window_assist(found, assist_type, max_len):
+def generate_extra_window_assist(found, assist_type, max_len, placeholder_emoji=False):
     """Generate extra window title and body for assist"""
     body = []
     prefix = ""
@@ -2775,7 +2800,10 @@ def generate_extra_window_assist(found, assist_type, max_len):
     else:
         title_line = "Unknown"
     for item in found:
-        body.append(f"{prefix}{item[0]}"[:max_len])
+        if placeholder_emoji and assist_type == 3 and item[1].startswith("<:"):
+            body.append(f"   - {item[0]}"[:max_len])
+        else:
+            body.append(f"{prefix}{item[0]}"[:max_len])
     if not body:
         body = ["No matches"]
     return title_line[:max_len], body
@@ -2812,7 +2840,7 @@ def generate_forum(threads, blocked, max_length, colors, colors_formatted, confi
     forum_thread_format = config["format_forum"]
     forum_format_timestamp = config["format_forum_timestamp"]
     color_blocked = [colors[2]]
-    color_format_forum = colors_formatted[8]   # 17 is unused
+    color_format_forum = colors_formatted[9]   # 19 is unused
     blocked_mode = config["blocked_mode"]
     limit_thread_name = config["limit_thread_name"]
     convert_timezone = config["convert_timezone"]

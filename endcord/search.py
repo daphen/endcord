@@ -263,6 +263,7 @@ def search_emojis(all_emojis, premium, guild_id, query, safe_emoji=False, limit=
         else:
             emojis = []
 
+    # discord emoji
     for guild in emojis:
         guild_name = guild["guild_name"]
         for guild_emoji in guild["emojis"]:

@@ -46,7 +46,7 @@ support_media = (
 )
 support_call = (
     importlib.util.find_spec("dave") is not None and
-    importlib.util.find_spec("nack") is not None
+    importlib.util.find_spec("nacl") is not None
 )
 cythonized = importlib.util.find_spec("endcord_cython") and importlib.util.find_spec("endcord_cython.search")
 uses_pgcurses = tui.uses_pgcurses
@@ -5582,11 +5582,12 @@ class Endcord:
                 self.assist_found.append(("Provided path is invalid", True))
 
         max_w = self.tui.get_dimensions()[2][1]
-        extra_title, extra_body = formatter.generate_extra_window_assist(self.assist_found, assist_type, max_w)
+        extra_title, extra_body = formatter.generate_extra_window_assist(self.assist_found, assist_type, max_w, self.placeholder_emoji)
         self.extra_window_open = True
         if (self.search or self.search_gif or self.command) and not (self.assist_word or self.assist_word == " "):
             self.extra_bkp = (self.tui.extra_window_title, self.tui.extra_window_body)
         self.assist_word = assist_word
+        self.execute_extensions_methods("on_assist", self.assist_found, assist_type, cache=True)
         self.tui.draw_extra_window(extra_title, extra_body, select=True)
 
 
@@ -6220,6 +6221,14 @@ class Endcord:
         """Generate channel tree"""
         if collapsed is None:
             collapsed = self.state["collapsed"]
+
+        # get selected tree entry id so it can "stick" to DM when it moves
+        tree_sel = self.tui.get_tree_selected()
+        if tree_sel > -1 and self.tree_metadata[tree_sel]["type"] in (1, 3):
+            selected_id = self.tree_metadata[tree_sel]["id"]
+        else:
+            selected_id = None
+
         self.tree, self.tree_format, self.tree_metadata = formatter.generate_tree(
             self.dms,
             self.guilds,
@@ -6241,6 +6250,13 @@ class Endcord:
         # debug.save_json(self.tree_format, "tree_format.json", False)
         # debug.save_json(self.tree_metadata, "tree_metadata.json", False)
         self.tui.update_tree(self.tree, self.tree_format)
+
+        # select moved DM if needed
+        if selected_id:
+            for num, entry in enumerate(self.tree_metadata):
+                if entry["id"] == selected_id:
+                    self.tui.tree_select(num)
+                    break
 
         # check for unreads/mentions for tray icon
         if uses_pgcurses:

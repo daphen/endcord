@@ -109,6 +109,8 @@ Note: always put string in `""`. To use `"` inside the string escape it like thi
     Will convert emoji characters to their names. Enable if emoji are not supported by terminal.
 - `message_spacing = True`  
     Will add one line space between messages not belonging to same user.
+- `message_grouping = True`  
+    Will replace `format_message` with `format_message_grouped` (same with color format) if consecutive messages are belonging to the same user in short period of time.
 - `native_media_player = False`  
     Use system native media player instead in-terminal ASCII art.
 - `native_file_dialog = "Auto"`  
@@ -221,6 +223,8 @@ Note: always put string in `""`. To use `"` inside the string escape it like thi
     Width of member list. It won't be drawn if remaining screen width for chat is less than 32 characters.
 - `format_message = "[%timestamp] <%global_name> %app%edited\n%content"`  
     Formatting for message base string. See [format_message](#format_message) for more info.
+- `format_message_grouped = " ├  %content %edited"`  
+    Formatting for message base string when this message is belonging to the same user as previous, in short period of time. See [format_message_grouped](#format_message_grouped) for more info.
 - `format_newline = " │  %content"`  
     Formatting for each newline string after message base. See [format_newline](#format_newline) for more info.
 - `format_reply = " ╭──🡲 [%timestamp] <%global_name>: %content"`  
@@ -385,6 +389,8 @@ Every next list has additional `start` and `end`- indexes on a line where color 
 - `color_tree_active_mentioned = [197, 234]`
 - `color_format_message = [[-1, -1], [242, -2, 0, 0, 7], [25, -2, 0, 8, 9], [25, -2, 0, 19, 20]]`  
     Color format for message base string. Corresponding to `format_message`.
+- `color_format_message_grouped = [[-1, -1], [242, -2, 0, 1, 2]]`  
+    Color format for message base string when this message is belonging to the same user as previous, in short period of time.
 - `color_format_newline = [[-1, -1], [242, -2, 0, 1, 2]]`  
     Color format for each newline string after message base. Corresponding to `format_newline`.
 - `color_format_reply = [[245, -1], [242, -2, 0, 1, 5], [25, -2, 0, 14, 15], [25, -2, 0, 25, 26]]`  
@@ -408,6 +414,11 @@ Every next list has additional `start` and `end`- indexes on a line where color 
 - `%edited` - replaced with `edited_string`  
 - `%app` - replaced with `app_string` if this message is sent by app or webhook
 Note: everything after `%content` may be pushed to newline.
+
+### format_message_grouped
+- `%content` - this is remainder of previous line
+- `%timestamp` - formatted with `format_timestamp`
+- `%edited` - replaced with `edited_string`, can be placed only after `% content`
 
 ### format_newline
 - `%content` - this is remainder of previous line

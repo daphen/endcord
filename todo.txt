@@ -1,11 +1,36 @@
+endcord-image-emoji
+    on_generate_assist
+        same as for chat
+    new worker
+        collect first N emoji and download
+        new cache for rel_positions
+        same cache for images
+        trigger redraw
+        merge cleanup
+    on_draw_extra_window
+        same draw as for chat
+
+
 Add internal option to add placeholder for image in chat
+    get thumb in message object (caan it be png?)
+    add vertical area to chat_format (placeholder_images is vertical space)
+    handle double-click on thumb
+
+endcord-image-inline
+    check kitty support
+    set app and formatter placeholder_images
+    download and cache thumb
+    start worker
+    calculate position on currently visible chat
+    update dimensions in chat_format
+    draw thumb to specified positins
+
 
 Fix sent audio is delayed and low quality
 Fix receiver audio mixer
 Add transmmitter audio mixer
 
 Add colors and formatting in assist window
-    add internal option to add placeholder for custom emoji
 Add favorite gifs
 Add ability to switch profile without closing
 Add scrollbar to chat
@@ -32,5 +57,4 @@ after fixing https://github.com/python/cpython/issues/119138
 Extensions:
 endcord-termux-rich
 endcord-undelete
-endcord-image-inline
 endcord-image-pfp

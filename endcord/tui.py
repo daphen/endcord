@@ -1716,6 +1716,7 @@ class TUI():
                 self.draw_chat(norefresh=True)
                 self.win_extra_window.noutrefresh()
                 self.need_update.set()
+        self.execute_extensions_methods("on_extra_window_draw", cache=False)
 
 
     def remove_extra_window(self):
@@ -1747,6 +1748,7 @@ class TUI():
                 self.draw_extra_line(self.extra_line_text)
                 self.draw_member_list(self.member_list, self.member_list_format, force=True)
                 self.draw_chat()
+        self.execute_extensions_methods("on_extra_window_remove", cache=False)
 
 
     def draw_member_list(self, member_list, member_list_format, force=False, reset=False, clean=True):
