@@ -274,23 +274,21 @@ class Endcord:
         self.tui.update_chat(self.chat, [[[self.colors[0]]]] * len(self.chat))
         self.tui.update_status_line(" CONNECTING")
         self.my_id = None   # will be taken from gateway in main()
-        # If we're going to draw inline avatars, reserve 6 leading cols on
-        # every chat line: 1 gutter + 5-cell avatar. The message text
-        # starts directly after the avatar.
+        # If we're going to draw inline avatars, reserve 6 leading cols
+        # on every chat line: 5-cell avatar + 1 col gap before content.
+        # NOTE: only prepend pad once. format_message has `\n%content`
+        # but the body content after the newline is processed via the
+        # wrap loop which uses format_newline (already padded), so adding
+        # pad after `\n` here would double-indent body lines.
         if self.pfp_renderer.enabled:
             pad = "      "
-            # Approximate width of the header before <name>: "[12:05] " = 8
-            # for the typical %H:%M timestamp. Aligning body content here
-            # makes a multi-line message read like indented prose under
-            # the speaker's name instead of butting against the separator.
-            header_offset = 8
-            self.config["format_message"] = pad + self.config["format_message"].replace("\n", "\n" + pad)
+            self.config["format_message"] = pad + self.config["format_message"]
+            # Strip the original leading from format_newline so wrapped
+            # body lines start at the same column as the header.
             fmt_nl = self.config["format_newline"]
-            if "%content" in fmt_nl:
-                body_prefix_len = len(fmt_nl.split("%content", 1)[0])
-                extra = max(header_offset - body_prefix_len, 0)
-                if extra:
-                    fmt_nl = fmt_nl.replace("%content", " " * extra + "%content", 1)
+            content_at = fmt_nl.find("%content")
+            if content_at > 0:
+                fmt_nl = fmt_nl[content_at:]
             self.config["format_newline"] = pad + fmt_nl
             self.config["format_reply"] = pad + self.config["format_reply"]
             self.config["format_reactions"] = pad + self.config["format_reactions"]
@@ -5993,6 +5991,26 @@ class Endcord:
             change_id=change_id,
             change_type=change_type,
         )
+        # Blank out the `:name:` text under every custom emoji so the
+        # image overlay isn't trailed by half-visible characters. Done
+        # before passing chat to the TUI.
+        if self.pfp_renderer.enabled:
+            for i, line in enumerate(self.chat_map):
+                if not (line and line[5] and len(line[5]) > 2 and line[5][2]):
+                    continue
+                if not (0 <= i < len(self.chat)):
+                    continue
+                buf_line = self.chat[i]
+                for r in line[5][2]:
+                    start, end = r[0], r[1]
+                    if start < len(buf_line):
+                        end = min(end, len(buf_line))
+                        buf_line = buf_line[:start] + " " * (end - start) + buf_line[end:]
+                self.chat[i] = buf_line
+            # Group consecutive messages from the same author within 5 min:
+            # drop the header line + spacer above it so the body of the
+            # continuation flows directly under the previous message.
+            self._apply_message_grouping()
         self.tui.set_wide(self.chat_map)
         self.tui.set_pfp_lines(self._build_pfp_lines())
         self.tui.set_emoji_lines(self._build_emoji_lines())
@@ -6398,6 +6416,77 @@ class Endcord:
             self.tui.set_tray_icon(tray_state)
 
 
+    def _apply_message_grouping(self):
+        """Discord-style streak grouping: hide header + leading spacer for
+        messages whose immediately-older neighbour is from the same author
+        within 5 minutes. The body of the continuation then sits directly
+        under the previous message's content.
+        """
+        if not self.messages or not self.chat_map:
+            return
+
+        from datetime import datetime as _dt
+
+        def _parse(ts):
+            if not ts:
+                return None
+            for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
+                try:
+                    return _dt.strptime(ts, fmt)
+                except (ValueError, TypeError):
+                    continue
+            return None
+
+        grouped = set()
+        for idx, msg in enumerate(self.messages):
+            if idx + 1 >= len(self.messages):
+                continue
+            older = self.messages[idx + 1]
+            if older.get("user_id") != msg.get("user_id"):
+                continue
+            t_msg = _parse(msg.get("timestamp"))
+            t_older = _parse(older.get("timestamp"))
+            if t_msg is None or t_older is None:
+                continue
+            if (t_msg - t_older).total_seconds() < 300:
+                grouped.add(idx)
+
+        if not grouped:
+            return
+
+        # In chat_buffer, lines are stored newest-first per message and the
+        # formatter reverses each message's block so its spacing line ends
+        # up at the HIGHEST index of that message's block (visually above
+        # the header). Header lines have a non-None timestamp range
+        # (chat_map[i][4]); the spacing line is the all-None entry that
+        # comes one index later.
+        to_remove = set()
+        for i, line in enumerate(self.chat_map):
+            if not line:
+                continue
+            if line[0] in grouped and line[4] is not None:
+                to_remove.add(i)
+                # Spacing line just above the header (higher chat[] index).
+                if i + 1 < len(self.chat_map):
+                    nxt = self.chat_map[i + 1]
+                    if nxt is None or nxt[0] is None:
+                        to_remove.add(i + 1)
+
+        if not to_remove:
+            return
+
+        new_chat, new_format, new_map = [], [], []
+        for i in range(len(self.chat_map)):
+            if i in to_remove:
+                continue
+            new_chat.append(self.chat[i])
+            new_format.append(self.chat_format[i])
+            new_map.append(self.chat_map[i])
+        self.chat = new_chat
+        self.chat_format = new_format
+        self.chat_map = new_map
+
+
     def _build_emoji_lines(self):
         """Return a list parallel to chat_buffer where each entry is a
         list of (col, emoji_id) tuples for the custom emojis on that
@@ -6510,6 +6599,12 @@ class Endcord:
                     next_line_map = self.chat_map[line_index + 1]
                     if next_line_map and next_line_map[0] == line_map[0] and next_line_map[2]:
                         return line_index - in_msg_start_index - 1
+                return line_index - in_msg_start_index
+        # Fallback: streak-grouped messages have no header line (we strip
+        # it). Return the first line that has the matching msg_index so
+        # navigation (Shift+J/K, ctrl+u, etc.) still finds them.
+        for line_index, line_map in enumerate(self.chat_map):
+            if line_map and line_map[0] == msg_index:
                 return line_index - in_msg_start_index
         return 0
 

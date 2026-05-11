@@ -656,6 +656,11 @@ class TUI():
         """Forcibly redraw entire screen"""
         self.screen.clear()
         self.screen.redrawwin()
+        # Some terminals drop Kitty image storage on a full screen clear,
+        # so the next placement needs to re-transmit. Same trick we use
+        # for tree-toggle.
+        if self.pfp_renderer is not None:
+            self.pfp_renderer.invalidate_transmissions()
         if sys.platform == "win32":
             self.screen.noutrefresh()   # ??? needed only with windows-curses
             self.need_update.set()
@@ -1530,9 +1535,14 @@ class TUI():
             row = chat_y + chat_h - 1 - (i - self.chat_index)
             if row < chat_y:
                 continue
-            # +1 col puts a small gutter between the chat's left border
-            # `│` and the avatar.
-            self.pfp_renderer.place(user_id, avatar_id, row, chat_x + 1)
+            # Avatar is PFP_ROWS rows tall — skip if placing it here would
+            # extend past the chat region (would bleed below the bottom
+            # border of the chat box).
+            if row + pfp_mod.PFP_ROWS > chat_y + chat_h:
+                continue
+            # Place flush with the chat's left border so the message text
+            # sits close to the gutter (no extra empty column between).
+            self.pfp_renderer.place(user_id, avatar_id, row, chat_x)
         # Inline custom emoji — placed at their in-line column for each
         # visible line.
         if self.emoji_lines:
@@ -3142,6 +3152,9 @@ class TUI():
                 return self.return_input_code((50, self.command_bindings.get(key)))
 
             elif key == curses.KEY_RESIZE:
+                # Terminal resize may invalidate Kitty image storage.
+                if self.pfp_renderer is not None:
+                    self.pfp_renderer.invalidate_transmissions()
                 self.resize()
                 _, w = self.input_hw
 

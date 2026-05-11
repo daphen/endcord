@@ -26,14 +26,15 @@ try:
 except ImportError:
     HAVE_PIL = False
 
-# Width/height in terminal cells. Terminal cells are typically taller
-# than wide (~1:2.5 in many Kitty configs), so cols:rows ratio is ~2.5:1
-# to keep the rendered avatar roughly square. 5 cols × 2 rows spans
-# the header row + first content row at most font sizes.
+# Width/height in terminal cells. 5×2 keeps the avatar square at the
+# typical Kitty cell ratio (~1:2.5). The chat-side pad is 6 = 5 avatar
+# cells + 1 col gap between the avatar and the message text.
 PFP_COLS = 5
 PFP_ROWS = 2
-# Inline custom emoji size — small enough not to disrupt line height.
-EMOJI_COLS = 2
+# Inline custom emoji size. Single-row so the image never bleeds into
+# the row below. 3 cols wide gives a slight horizontal stretch but
+# stays roughly emoji-sized (~text height).
+EMOJI_COLS = 3
 EMOJI_ROWS = 1
 # Pixel size to request for emoji from the CDN.
 EMOJI_SIZE_PX = 48
