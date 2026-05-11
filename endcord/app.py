@@ -7954,10 +7954,15 @@ class Endcord:
                         new_typing["user_id"] != self.my_id
                     ):
                         if not new_typing["username"]:   # its DM
+                            # Match recipient by user_id so group DMs show
+                            # the actual typer instead of always recipients[0].
                             for dm in self.dms:
                                 if dm["id"] == new_typing["channel_id"]:
-                                    new_typing["username"] = dm["recipients"][0]["username"]
-                                    new_typing["global_name"] = dm["recipients"][0]["global_name"]
+                                    for recipient in dm["recipients"]:
+                                        if recipient["id"] == new_typing["user_id"]:
+                                            new_typing["username"] = recipient["username"]
+                                            new_typing["global_name"] = recipient["global_name"]
+                                            break
                                     break
                         for num, user in enumerate(self.typing):
                             if user["user_id"] == new_typing["user_id"]:
