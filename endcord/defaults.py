@@ -220,6 +220,7 @@ keybindings = {
     "jump_next_media": 277,   # F13 — overridden by vim mode ]m
     "jump_prev_media": 278,   # F14 — overridden by vim mode [m
     "jump_last_channel": 279,   # F15 — overridden by vim mode Ctrl+O
+    "jump_latest_unread": 280,   # F16 — overridden by vim mode N
     "reply": 18,   # Ctrl+R
     "edit": 5,   # Ctrl+E
     "delete": 4,   # Ctrl+D
@@ -289,6 +290,7 @@ vim_mode_bindings = {
     "jump_next_media": 4,    # Ctrl+D
     "jump_prev_media": 21,   # Ctrl+U
     "jump_last_channel": 15,   # Ctrl+O
+    "jump_latest_unread": "N",
     "tree_select": " ",
     "tree_collapse_threads": "W",
     "tree_join_thread": "O",

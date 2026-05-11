@@ -320,10 +320,14 @@ class TUI():
         self.pfp_renderer = None
         self.pfp_lines = []
         self.emoji_lines = []
+        # image_lines: parallel to chat_buffer. None or (col, url) for
+        # lines that carry an image-attachment URL we want to preview.
+        self.image_lines = []
         self._pfp_dirty = False
         self.tree = []
         self.tree_format = []
         self.tree_clean_len = 0
+        self.mention_count = 0
         self.chat_selected = -1   # hidden selection by default
         self.tree_selected = -1
         self.dont_hide_chat_selection = False
@@ -819,6 +823,13 @@ class TUI():
                     if self.assist_start != 1 and (self.input_buffer[self.assist_start-2] not in (" ", "\n") or self.input_buffer[self.assist_start] in (" ", "\n")):
                         # skip trigger if no space before it
                         return None, None
+                    # Skip if char right after the trigger isn't alnum/underscore:
+                    # avoids opening the picker for ASCII smileys like :), :(,
+                    # :/, :|, :*, ;), etc. Real channel/user/emoji/sticker names
+                    # always start with an alphanumeric char.
+                    first = self.input_buffer[self.assist_start]
+                    if not (first.isalnum() or first == "_"):
+                        return None, None
                     assist_word = self.input_buffer[self.assist_start : self.input_index]
                     return assist_word, assist_type
                 self.assist_start = -1
@@ -1101,6 +1112,11 @@ class TUI():
         """Select specific item in tree by its index"""
         if tree_pos is None:
             return
+        # The tree's curses refresh can shift Kitty image cells in some
+        # terminals (we've seen the inline avatars/attachments slide
+        # vertically on tree nav). Mark placements dirty so the next
+        # screen_update re-anchors them in the chat region.
+        self._pfp_dirty = True
         skipped = 0
         drop_down_skip_folder = False
         drop_down_skip_guild = False
@@ -1272,6 +1288,31 @@ class TUI():
             self.need_update.set()
 
 
+    def _mention_badge(self):
+        """Return a '(N)' string with the count of channels worth
+        notifying the user about. Empty when the tree is visible.
+
+        The count is computed in app.update_tree (where DM and guild
+        data is directly available) and pushed via set_mention_count.
+        Counting from tree_format is unreliable because DM codes and
+        guild-channel codes both share the 300-range — see set_mention_count.
+        """
+        if self.tree_width > 0:
+            return ""
+        if not self.mention_count:
+            return ""
+        return f"({self.mention_count})"
+
+
+    def set_mention_count(self, count):
+        """Set the notification count shown in the title bar when the
+        tree is hidden. Called by app.update_tree."""
+        if count != self.mention_count:
+            self.mention_count = count
+            if self.tree_width == 0 and not self.disable_drawing:
+                self.draw_title_line()
+
+
     def draw_title_line(self):
         """Draw title line, works same as status line"""
         with self.lock:
@@ -1280,6 +1321,9 @@ class TUI():
             if title_txt_r:
                 title_txt_r = title_txt_r[:w - 2*self.bordered]
             title_txt_l = self.title_txt_l
+            badge = self._mention_badge()
+            if badge:
+                title_txt_l = f"{badge} {title_txt_l}"
 
             if 0 < self.tree_width < 10:   # merge title tree with left title
                 if self.bordered:
@@ -1500,6 +1544,12 @@ class TUI():
         self.emoji_lines = emoji_lines
 
 
+    def set_image_lines(self, image_lines):
+        """Update the per-line attachment-image map (parallel to
+        chat_buffer). Each entry is None or (col, url)."""
+        self.image_lines = image_lines
+
+
     def place_inline_pfps(self):
         """Render avatars for currently visible header lines.
 
@@ -1535,14 +1585,39 @@ class TUI():
             row = chat_y + chat_h - 1 - (i - self.chat_index)
             if row < chat_y:
                 continue
-            # Avatar is PFP_ROWS rows tall — skip if placing it here would
+            # Avatar is pfp_rows rows tall — skip if placing it here would
             # extend past the chat region (would bleed below the bottom
             # border of the chat box).
-            if row + pfp_mod.PFP_ROWS > chat_y + chat_h:
+            if row + self.pfp_renderer.pfp_rows > chat_y + chat_h:
                 continue
             # Place flush with the chat's left border so the message text
             # sits close to the gutter (no extra empty column between).
             self.pfp_renderer.place(user_id, avatar_id, row, chat_x)
+        # Inline image attachments — per-image (cols, rows) come from
+        # app-side measurement so the thumbnail keeps its source aspect.
+        if self.image_lines:
+            for i in range(self.chat_index, min(self.chat_index + chat_h, len(self.image_lines))):
+                entry = self.image_lines[i]
+                if not entry:
+                    continue
+                col_off, url, image_cols, image_rows = entry
+                row = chat_y + chat_h - 1 - (i - self.chat_index)
+                if row < chat_y:
+                    continue
+                # Safety net: if scrolled such that the reserved blanks
+                # have been clipped, shrink rows (and cols proportionally)
+                # so the thumbnail still fits.
+                available_rows = chat_y + chat_h - row
+                if available_rows < 1:
+                    continue
+                rows_to_use = min(image_rows, available_rows)
+                cols_to_use = max(1, image_cols * rows_to_use // image_rows)
+                abs_col = chat_x + col_off
+                if abs_col < chat_x or abs_col >= chat_x + self.chat_hw[1]:
+                    continue
+                self.pfp_renderer.place_attachment(
+                    url, row, abs_col, cols=cols_to_use, rows=rows_to_use,
+                )
         # Inline custom emoji — placed at their in-line column for each
         # visible line.
         if self.emoji_lines:
@@ -2443,11 +2518,13 @@ class TUI():
                 if self.tree_index and self.tree_selected <= self.tree_index + 2:
                     self.tree_index -= 1
                 self.tree_selected -= 1
+                self._pfp_dirty = True
                 self.draw_tree()
             elif self.wrap_around:
                 tree_end_index = self.get_tree_index(0)
                 self.tree_selected = tree_end_index
                 self.tree_index = max(self.tree_selected - (self.tree_hw[0] - 1), 0)
+                self._pfp_dirty = True
                 self.draw_tree()
 
         elif key in self.keybindings["tree_down"]:
@@ -2456,10 +2533,12 @@ class TUI():
                 if top_line < self.tree_clean_len and self.tree_selected >= top_line - 3:
                     self.tree_index += 1
                 self.tree_selected += 1
+                self._pfp_dirty = True
                 self.draw_tree()
             elif self.wrap_around:
                 self.tree_selected = 0
                 self.tree_index = 0
+                self._pfp_dirty = True
                 self.draw_tree()
 
         elif key in self.keybindings["tree_select"]:
@@ -3073,6 +3152,9 @@ class TUI():
 
             elif key in self.keybindings["jump_last_channel"]:
                 return self.return_input_code(54)
+
+            elif key in self.keybindings["jump_latest_unread"]:
+                return self.return_input_code(55)
 
             elif key in self.keybindings["spoil"] and self.chat_selected != -1 and not forum:
                 return self.return_input_code(18)

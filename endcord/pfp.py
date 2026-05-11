@@ -11,11 +11,14 @@ spaces to each header / newline so the avatar doesn't cover text.
 """
 
 import base64
+import hashlib
 import io
 import logging
 import os
 import sys
 import threading
+import urllib.error
+import urllib.request
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,22 @@ PFP_ROWS = 2
 # stays roughly emoji-sized (~text height).
 EMOJI_COLS = 3
 EMOJI_ROWS = 1
+# Inline image-attachment thumbnail. The actual display dimensions
+# (cols × rows) are computed per-image to preserve the source aspect
+# ratio. ATTACHMENT_MAX_COLS / ATTACHMENT_MAX_ROWS are upper bounds.
+# CELL_ASPECT = approximate cell height / cell width for typical Kitty
+# fonts; used to translate source pixel aspect into cell aspect.
+ATTACHMENT_MAX_COLS = 40
+ATTACHMENT_MAX_ROWS = 18
+# Cell height / cell width. Increase to make images wider, decrease
+# to make them taller (counter-intuitive: this is the multiplier
+# we use to translate source aspect into cell aspect).
+CELL_ASPECT = 2.8
+# Max pixel dim for the on-disk thumbnail. Big enough that Kitty
+# doesn't have to upscale when rendering at MAX_COLS×MAX_ROWS cells.
+ATTACHMENT_THUMB_PX = 768
+# HTTP timeout for synchronous attachment downloads.
+ATTACHMENT_TIMEOUT_S = 4
 # Pixel size to request for emoji from the CDN.
 EMOJI_SIZE_PX = 48
 # Pixel size to ask Discord for. Anything >= cell-pixels * dimensions works.
@@ -71,6 +90,50 @@ def _send(payload):
         os.write(sys.stdout.fileno(), payload)
     except OSError:
         pass
+
+
+def detect_cell_aspect():
+    """Probe the controlling terminal for cell pixel dimensions via
+    TIOCGWINSZ. Returns cell_h / cell_w as a float, or None if the
+    terminal didn't report pixel dimensions (most non-Kitty TTYs).
+    Kitty (and Ghostty) fill ws_xpixel/ws_ypixel so this works without
+    a stdin-blocking CSI query.
+    """
+    try:
+        import fcntl
+        import termios
+        for path in ("/dev/tty", None):
+            try:
+                fd = os.open(path, os.O_RDONLY) if path else sys.stdout.fileno()
+                buf = fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\0" * 8)
+                if path:
+                    os.close(fd)
+                import struct
+                rows, cols, xpix, ypix = struct.unpack("HHHH", buf)
+                if rows > 0 and cols > 0 and xpix > 0 and ypix > 0:
+                    cw = xpix / cols
+                    ch = ypix / rows
+                    return ch / cw
+            except OSError:
+                continue
+    except ImportError:
+        pass
+    return None
+
+
+def best_square(rows, cell_aspect):
+    """Return (cols, rows) closest to a 1:1 visual square at the given
+    cell aspect. rows is fixed (callers choose layout height); cols is
+    picked from {floor, ceil} of rows×cell_aspect, whichever lands
+    closer to a true square."""
+    ideal_c = rows * cell_aspect
+    best = None
+    for c in (max(1, int(ideal_c)), max(1, int(ideal_c) + 1)):
+        visual = c / (rows * cell_aspect)
+        err = abs(visual - 1.0) if visual >= 1.0 else abs(1.0 / visual - 1.0)
+        if best is None or err < best[0]:
+            best = (err, c)
+    return best[1], rows
 
 
 def _chunk_payload(data, controls):
@@ -118,6 +181,19 @@ class PfpRenderer:
         # placement_id so two avatars from the same author don't collide.
         self._next_placement_id = 1
         self._lock = threading.Lock()
+        # Auto-tune (cols, rows) to render a visually square avatar at
+        # the terminal's actual cell pixel aspect. Falls back to the
+        # hardcoded 5×2 if the terminal doesn't report pixel dims.
+        detected = detect_cell_aspect()
+        self.cell_aspect = detected or CELL_ASPECT
+        self.pfp_cols, self.pfp_rows = best_square(2, self.cell_aspect)
+        self.emoji_cols, self.emoji_rows = best_square(1, self.cell_aspect)
+        logger.info(
+            f"pfp cell_aspect={self.cell_aspect:.3f} "
+            f"(detected={detected is not None}) "
+            f"pfp={self.pfp_cols}x{self.pfp_rows} "
+            f"emoji={self.emoji_cols}x{self.emoji_rows}"
+        )
 
     def _alloc_id(self, avatar_id):
         with self._lock:
@@ -258,10 +334,130 @@ class PfpRenderer:
         finally:
             self._fetching.discard(key)
 
-    def place_emoji(self, emoji_id, row, col, cols=EMOJI_COLS, rows=EMOJI_ROWS):
+    def _attachment_path(self, url):
+        """Download and PNG-thumbnail an arbitrary image URL.
+
+        Cached by URL hash; returns local path or None on failure.
+        Synchronous — caller is the draw thread, so this blocks. The
+        cache-hit path is fast; first load of each image incurs the
+        download cost once.
+        """
+        if not HAVE_PIL:
+            return None
+        key = hashlib.sha256(url.encode("utf-8", "replace")).hexdigest()[:16]
+        png_path = os.path.join(os.path.expanduser(self.cache_path), f"attach_{key}.png")
+        if os.path.isfile(png_path):
+            return png_path
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "endcord"})
+            with urllib.request.urlopen(req, timeout=ATTACHMENT_TIMEOUT_S) as resp:
+                raw = resp.read()
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            logger.debug(f"attachment fetch failed {url}: {e}")
+            return None
+        try:
+            with Image.open(io.BytesIO(raw)) as im:
+                im = im.convert("RGB")
+                im.thumbnail((ATTACHMENT_THUMB_PX, ATTACHMENT_THUMB_PX), Image.LANCZOS)
+                im.save(png_path, format="PNG")
+        except Exception as e:
+            logger.debug(f"attachment convert failed {url}: {e}")
+            return None
+        return png_path
+
+    def measure_attachment(
+        self,
+        url,
+        max_cols=ATTACHMENT_MAX_COLS,
+        max_rows=ATTACHMENT_MAX_ROWS,
+        cell_aspect=None,
+    ):
+        """Download the image if needed and return (cols, rows) for an
+        aspect-preserving placement.
+
+        Returns None if the image can't be loaded. The returned cell
+        dimensions fit within (max_cols, max_rows) and approximate the
+        source pixel aspect ratio given the terminal's cell_aspect
+        (cell_height / cell_width).
+        """
+        if not HAVE_PIL:
+            return None
+        if cell_aspect is None:
+            cell_aspect = self.cell_aspect
+        path = self._attachment_path(url)
+        if not path:
+            return None
+        try:
+            with Image.open(path) as im:
+                sw, sh = im.size
+        except Exception as e:
+            logger.debug(f"attachment measure failed {url}: {e}")
+            return None
+        if sw <= 0 or sh <= 0:
+            return None
+        # Cell aspect = cell_h / cell_w. For a cell area c×r to display
+        # an image with source aspect sw:sh undistorted:
+        #   (c * cell_w) / (r * cell_h) = sw / sh
+        #   c / r = (sw / sh) * cell_aspect
+        ratio = (sw / sh) * cell_aspect
+        # Fit within (max_cols, max_rows) preserving ratio.
+        if ratio >= max_cols / max_rows:
+            cols = max_cols
+            rows = max(1, round(cols / ratio))
+        else:
+            rows = max_rows
+            cols = max(1, round(rows * ratio))
+        return cols, rows
+
+    def _ensure_attachment_transmitted(self, url):
+        """Transmit attachment PNG to Kitty if not already; return image id."""
+        key = f"attach:{url}"
+        if key in self._transmitted:
+            return self._transmitted[key]
+        if key in self._fetching:
+            return None
+        self._fetching.add(key)
+        try:
+            path = self._attachment_path(url)
+            if not path:
+                return None
+            with self._lock:
+                kid = self._next_id
+                self._next_id += 1
+                self._transmitted[key] = kid
+            with open(path, "rb") as f:
+                data = f.read()
+            ctrl = f"a=t,f=100,i={kid},q=2"
+            _send(_chunk_payload(data, ctrl))
+            return kid
+        finally:
+            self._fetching.discard(key)
+
+    def place_attachment(self, url, row, col, cols=ATTACHMENT_MAX_COLS, rows=ATTACHMENT_MAX_ROWS):
+        """Place an attachment thumbnail at (row, col)."""
+        if not self.enabled or not url:
+            return
+        kid = self._ensure_attachment_transmitted(url)
+        if kid is None:
+            return
+        with self._lock:
+            pid = self._next_placement_id
+            self._next_placement_id += 1
+        cup = f"\x1b[{row + 1};{col + 1}H".encode("ascii")
+        place = (
+            f"\x1b_Ga=p,i={kid},p={pid},c={cols},r={rows},C=1,q=2\x1b\\"
+        ).encode("ascii")
+        _send(cup + place)
+        self._placed.add(kid)
+
+    def place_emoji(self, emoji_id, row, col, cols=None, rows=None):
         """Place a custom emoji at terminal cell (row, col)."""
         if not self.enabled or not emoji_id:
             return
+        if cols is None:
+            cols = self.emoji_cols
+        if rows is None:
+            rows = self.emoji_rows
         kid = self._ensure_emoji_transmitted(emoji_id)
         if kid is None:
             return
@@ -296,7 +492,7 @@ class PfpRenderer:
             self._next_placement_id += 1
         cup = f"\x1b[{row + 1};{col + 1}H".encode("ascii")
         place = (
-            f"\x1b_Ga=p,i={kid},p={pid},c={PFP_COLS},r={PFP_ROWS},C=1,q=2\x1b\\"
+            f"\x1b_Ga=p,i={kid},p={pid},c={self.pfp_cols},r={self.pfp_rows},C=1,q=2\x1b\\"
         ).encode("ascii")
         _send(cup + place)
         self._placed.add(kid)
