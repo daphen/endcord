@@ -1583,13 +1583,16 @@ class Endcord:
             # (older) means a HIGHER index, visually-down (newer) means lower.
             elif (action == 50 or action == 51) and self.messages:
                 self.restore_input_text = (input_text, "standard")
-                # If selection is hidden (-1), use top-of-viewport so we
-                # don't jump from the bottom of the chat.
-                ref_line = chat_sel if chat_sel >= 0 else self.tui.chat_index + 3
-                cur = self.lines_to_msg(ref_line)
-                if cur is None:
-                    continue
-                target = cur + (1 if action == 50 else -1)
+                # When the selection is hidden, first press lands on the
+                # newest message (matches j/k semantics: k from hidden
+                # highlights bottom-of-viewport).
+                if chat_sel >= 0:
+                    cur = self.lines_to_msg(chat_sel, space=True)
+                    if cur is None:
+                        continue
+                    target = cur + (1 if action == 50 else -1)
+                else:
+                    target = 0
                 if 0 <= target < len(self.messages):
                     self.tui.set_selected(self.msg_to_lines(target, smart=True))
 
@@ -1600,11 +1603,18 @@ class Endcord:
             # extra chunks, ≈100 more messages).
             elif (action == 52 or action == 53) and self.messages:
                 self.restore_input_text = (input_text, "standard")
-                ref_line = chat_sel if chat_sel >= 0 else self.tui.chat_index + 3
-                cur_idx = self.lines_to_msg(ref_line)
-                if cur_idx is None:
-                    continue
                 direction = -1 if action == 52 else 1
+                # When selection is hidden, include the newest message in
+                # the search so Ctrl+U lands on it if it has media (matches
+                # the j/k mental model: first press = newest).
+                if chat_sel >= 0:
+                    cur_idx = self.lines_to_msg(chat_sel, space=True)
+                    if cur_idx is None:
+                        continue
+                    start_offset = direction
+                else:
+                    cur_idx = 0
+                    start_offset = 0
                 cur_id = self.messages[cur_idx]["id"]
                 found_idx = None
                 for _ in range(5):
@@ -1612,7 +1622,7 @@ class Endcord:
                     cur_idx = next((i for i, m in enumerate(self.messages) if m["id"] == cur_id), None)
                     if cur_idx is None:
                         break
-                    start = cur_idx + direction
+                    start = cur_idx + start_offset
                     end = -1 if direction == -1 else len(self.messages)
                     for i in range(start, end, direction):
                         m = self.messages[i]
@@ -5472,9 +5482,26 @@ class Endcord:
                 )
 
         elif assist_type == 2:   # username/role
+            # In a DM (no guild_id), the upstream path calls
+            # gateway.request_members(None, ...) which returns nothing,
+            # so @-mention shows no candidates. Fall back to the DM's
+            # own recipients list so the user can tag anyone in the chat.
+            dm_query_results = query_results
+            if not self.active_channel["guild_id"] and not query_results:
+                for dm in self.dms:
+                    if dm["id"] == self.active_channel["channel_id"]:
+                        dm_query_results = [
+                            {
+                                "id": r["id"],
+                                "username": r["username"],
+                                "name": r["global_name"] or "",
+                            }
+                            for r in dm["recipients"]
+                        ]
+                        break
             self.assist_found = search.search_usernames_roles(
                 self.current_roles,
-                query_results,
+                dm_query_results,
                 self.active_channel["guild_id"],
                 self.gateway,
                 assist_word,
