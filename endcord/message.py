@@ -59,25 +59,27 @@ def prepare_embeds(embeds, message_content):
                 content.append(field["name"])
                 content.append(field["value"])
             media += [False] * len(re.findall(match_url, field["name"] + "\n" + field["value"]))
+        if "thumbnail" in embed:
+            proxy_url = embed["thumbnail"]["proxy_url"]
+            hw = (embed["thumbnail"]["height"], embed["thumbnail"]["width"])
         if "image" in embed and "url" in embed["image"]:
             content.append(embed["image"]["url"])
             main_url = embed["image"]["url"]
-            proxy_url = embed["image"]["proxy_url"]
-            hw = (embed["image"]["height"], embed["image"]["width"])
+            if not proxy_url and "proxy_url" in embed["image"]:
+                proxy_url = embed["image"]["proxy_url"]
+                hw = (embed["image"]["height"], embed["image"]["width"])
             media.append(True)
         if "video" in embed and "url" in embed["video"]:
             content.append(embed["video"]["url"])
             if not skip_main_url:
                 main_url = embed["video"]["url"]
-            proxy_url = embed["video"]["proxy_url"]
-            hw = (embed["video"]["height"], embed["video"]["width"])
+            if not proxy_url and "proxy_url" in embed["video"]:
+                proxy_url = embed["video"]["proxy_url"]
+                hw = (embed["video"]["height"], embed["video"]["width"])
             media.append(True)
         if "footer" in embed and "text" in embed["footer"]:
             content.append(embed["footer"]["text"])
             media += [False] * len(re.findall(match_url, embed["footer"]["text"]))
-        if "thumbnail" in embed:
-            proxy_url = embed["thumbnail"]["proxy_url"]
-            hw = (embed["thumbnail"]["height"], embed["thumbnail"]["width"])
 
         content = "\n".join(content)
         if content:

@@ -1051,7 +1051,7 @@ class ChatGenerator:
         self.limit_chat_buffer = config["limit_chat_buffer"]
         self.font_aspect_ratio = config["media_font_aspect_ratio"]
         self.placeholder_emoji = "  " if placeholder_emoji else None
-        self.placeholder_images = config["inline_media_height"]+1 if placeholder_images else None
+        self.placeholder_images = (config["inline_media_height"] + 1) if placeholder_images else None
 
         # load colors
         self.color_default = [colors[0]]
@@ -1638,9 +1638,9 @@ class ChatGenerator:
                     w = embed["hw"][1]
                     scale = min(self.placeholder_images / h, (max_length - self.newline_len) / w)
                     h = int(h * scale)
-                    w = int(w * scale)
-                    # content += "\n" * (h + 1)
-                    content += ("\n" + "#" * w) * h
+                    w = int(w * scale) - 1
+                    content += "\n" * h
+                    # content += ("\n" + "#" * w) * h
                     image_locations.append((h, w))
         for sticker in message["stickers"]:
             sticker_type = sticker["format_type"]
