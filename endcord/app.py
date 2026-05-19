@@ -69,6 +69,8 @@ MAIN_LOOP_POLL_DELAY = 0.1   # if too small will use more cpu
 MB = 1024 * 1024
 USER_UPLOAD_LIMITS = (10*MB, 50*MB, 500*MB, 50*MB)   # premium tier 0, 1, 2, 3 (none, classic, full, basic)
 GUILD_UPLOAD_LIMITS = (10*MB, 10*MB, 50*MB, 100*MB)   # premium tier 0, 1, 2, 3
+LIMIT_MSG_LEN = 2000
+LIMIT_MSG_LEN_PREMIUM = 4000
 FORUM_COMMANDS = (1, 2, 7, 13, 14, 15, 17, 20, 22, 25, 27, 29, 30, 31, 32, 40, 42, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 61, 62, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 79, 81)
 COLLAPSE_ALL_EXCEPT_OPTIONS = ("current", "selected", "above", "bellow")
 STANDING_TYPES = ("All Good", "Limited", "Very Limited", "At risk", "Suspended")
@@ -152,8 +154,9 @@ class Endcord:
         self.silence_threshold = config["call_silence_threshold"]
         self.font_ratio = config["media_font_aspect_ratio"]
         self.inline_media = False   # config["inline_media"] and support_media
-        self.inline_media_height = config["inline_media_height"]
-        self.inline_media_download_height = config["inline_media_download_height"]
+        self.inline_media_quality = config["inline_media_quality"]
+        if self.inline_media_quality not in ("lossless", "low", "high"):
+            self.inline_media_quality = "low"
         self.placeholder_emoji = False   # for extensions
         self.placeholder_images = self.inline_media   # keeping this separated so extension can toggle it
 
@@ -291,6 +294,7 @@ class Endcord:
         )
         self.premium = None    # same
         self.my_user_data = None    # same
+        self.limit_msg_len = LIMIT_MSG_LEN   # same
         self.channel_cache = []
         self.voice_gateway = None
         self.reset()
@@ -610,7 +614,7 @@ class Endcord:
                 # download and cache (disk and ram)
                 if image_id not in self.image_cache:
                     img_format = "webp" if support_media else "png"
-                    img_quality = "&quality=lossless" if support_media and "//media." in img_url else ""
+                    img_quality = "lossless" if support_media and "//media." in img_url else self.inline_media_quality
                     if img_url.endswith("&"):
                         img_url += "="
                     if "?" not in img_url:
@@ -632,7 +636,7 @@ class Endcord:
                             pass
 
                     # download
-                    img_url = f"{img_url}&format={img_format}{img_quality}&width={img_w}&height={img_h}"
+                    img_url = f"{img_url}&format={img_format}&quality={img_quality}&width={img_w}&height={img_h}"
                     img_name = f"{image_id}_{img_w}_{img_h}.{img_format}"
                     image_path = self.discord.get_file(img_url, image_cache_path, file_name=img_name, cache=True)
                     image_cache[image_id] = (image_path, rel_y, rel_x)
@@ -743,6 +747,7 @@ class Endcord:
         self.cache_deleted()
         self.reset(online=True)
         self.premium = self.gateway.get_premium()
+        self.limit_msg_len = LIMIT_MSG_LEN_PREMIUM if self.premium else LIMIT_MSG_LEN
         guilds = self.gateway.get_guilds()
         if guilds:
             self.guilds = guilds
@@ -1884,6 +1889,7 @@ class Endcord:
                             self.media_thread = threading.Thread(target=self.open_media, daemon=True, args=(file_path, ))
                             self.media_thread.start()
 
+            # paste
             elif action == 23:
                 self.restore_input_text = (None, None)
                 self.add_to_store(self.active_channel["channel_id"], input_text)
@@ -2729,6 +2735,14 @@ class Endcord:
                         self.update_extra_line("Nothing happens.")
                     if not text_to_send.strip():
                         continue
+                    if input_text.startswith("+:") and utils.is_emoji(text_to_send[1:]):
+                        msg_index = self.lines_to_msg(chat_sel)
+                        self.build_reaction(text_to_send[1:], msg_index=msg_index)
+                        continue
+                    if len(text_to_send) > self.limit_msg_len:
+                        self.update_extra_line(f"Cant send a message: text is too long ({self.limit_msg_len - len(text_to_send)})")
+                        self.restore_input_text = (input_text, "standard")
+                        continue
                     nonce = discord.generate_nonce()
                     self.put_to_message_sender(self.discord.send_message,
                         self.active_channel["channel_id"],
@@ -3573,7 +3587,6 @@ class Endcord:
                     self.gateway.set_offline()
                     self.stop_assist()
                     self.update_extra_line("Network error.")
-                    self.restore_input_text = (input_text, "standard")
                     return
                 extra_title, extra_body = formatter.generate_extra_window_search_gif(self.search_messages, max_w)
                 self.tui.draw_extra_window(extra_title, extra_body, select=True)
@@ -4041,6 +4054,27 @@ class Endcord:
                 utils.save_json(self.state, f"state_{self.profiles["selected"]}.json")
                 self.update_tree()
 
+        elif cmd_type == 82:   # SEND_AS_FILE
+            # get input text
+            for num, channel in enumerate(self.input_store):
+                if channel["id"] == self.active_channel["channel_id"]:
+                    input_text = self.input_store[num]["content"]
+                    break
+            else:
+                return
+            if not input_text:
+                return
+            # save text to file and upload
+            temp_message_path = os.path.join(os.path.expanduser(peripherals.temp_path), "message.txt")
+            with open(temp_message_path, "w", encoding="utf-8") as file:
+                file.write(input_text)
+            self.upload_threads.append(threading.Thread(target=self.upload, daemon=True, args=(temp_message_path, None, True)))
+            self.upload_threads[-1].start()
+            self.reset_states()
+            self.tui.set_input_index(0)
+            self.restore_input_text = ("", "standard")
+            reset = False
+
         if success is None:
             self.gateway.set_offline()
             self.update_extra_line("Network error.")
@@ -4263,7 +4297,9 @@ class Endcord:
 
 
     def smart_paste(self):
-        """Smart paste that pastes text and files and adds them as attachmemnts"""
+        """Paste text and files and add them as attachmemnts, paste too long text as attachment"""
+        if self.forum:
+            return
         paths = []
         if shutil.which("xclip") or shutil.which("wl-paste"):
             paths = peripherals.paste_clipboard_files(peripherals.temp_path)
@@ -4273,19 +4309,25 @@ class Endcord:
             self.update_extra_line("No media support.")
         if not paths:
             self.update_extra_line("No data found in clipboard.")
-        if isinstance(paths, str):
-            active_channel = self.active_channel["channel_id"]
-            for num, channel in enumerate(self.input_store):
-                if channel["id"] == active_channel:
-                    input_text = self.input_store[num]["content"]
-                    input_index = self.input_store[num]["index"]
-                    self.input_store[num]["content"] = input_text[:input_index] + paths + input_text[input_index:]
-                    self.input_store[num]["index"] = input_index + len(paths)
-                    break
-        elif not self.forum:
+        if isinstance(paths, list):
             for path in paths:
                 self.upload_threads.append(threading.Thread(target=self.upload, daemon=True, args=(path, )))
                 self.upload_threads[-1].start()
+        active_channel = self.active_channel["channel_id"]
+        for num, channel in enumerate(self.input_store):
+            if channel["id"] == active_channel:
+                input_text = self.input_store[num]["content"]
+                if len(paths) < self.limit_msg_len:
+                    input_index = self.input_store[num]["index"]
+                    self.input_store[num]["content"] = input_text[:input_index] + paths + input_text[input_index:]
+                    self.input_store[num]["index"] = input_index + len(paths)
+                else:
+                    temp_message_path = os.path.join(os.path.expanduser(peripherals.temp_path), "message.txt")
+                    with open(temp_message_path, "w", encoding="utf-8") as file:
+                        file.write(paths)
+                    self.upload_threads.append(threading.Thread(target=self.upload, daemon=True, args=(temp_message_path, None, True)))
+                    self.upload_threads[-1].start()
+                break
 
 
     def get_chat_last_message_id(self):
@@ -4625,7 +4667,7 @@ class Endcord:
             self.update_extra_line("File saved to clipboard")
 
 
-    def upload(self, path, channel_id=None):
+    def upload(self, path, channel_id=None, delete=False):
         """Thread that uploads file to currently open channel"""
         path = os.path.expanduser(path)
         if not os.path.exists(path):
@@ -4692,6 +4734,8 @@ class Endcord:
                     self.ready_attachments[channel_id][at_index]["state"] = 2
         except IndexError:
             self.update_extra_line("Failed uploading attachment.")
+        if delete:
+            os.remove(path)
         self.update_extra_line()
         self.remove_running_task("Uploading file", 2)
 
@@ -7112,6 +7156,7 @@ class Endcord:
             if "name" in new_user_data:   # its my user_update
                 self.my_user_data = new_user_data
                 self.premium = self.gateway.get_premium()
+                self.limit_msg_len = LIMIT_MSG_LEN_PREMIUM if self.premium else LIMIT_MSG_LEN
                 if self.rpc.run:
                     self.rpc.generate_dispatch(new_user_data)
             else:   # its guild_member_update
@@ -7748,6 +7793,7 @@ class Endcord:
         self.formatter.set_my_id(self.my_id)
         self.premium = self.gateway.get_premium()
         self.my_user_data = self.gateway.get_my_user_data()
+        self.limit_msg_len = LIMIT_MSG_LEN_PREMIUM if self.premium else LIMIT_MSG_LEN
         self.update_prompt()
         self.reset_states(replying=True)
         self.update_status_line()

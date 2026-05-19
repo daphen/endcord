@@ -1631,7 +1631,8 @@ class ChatGenerator:
                     content += f"[rich embed]:\n{embed_url}"
                 else:
                     if self.trim_embed_url_size:
-                        embed_url = trim_string(embed_url, self.trim_embed_url_size)
+                        if embed["main_url"] == embed_url:
+                            embed_url = trim_string(embed_url, self.trim_embed_url_size)
                     content += f"[{clean_type(embed["type"])} embed]: {embed_url}"
                 if self.placeholder_images and embed.get("proxy_url") and embed["hw"]:
                     h = embed["hw"][0] / self.font_ratio

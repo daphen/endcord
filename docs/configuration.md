@@ -112,8 +112,8 @@ Note: always put string in `""`. To use `"` inside the string escape it like thi
     Draw inline images in chat. Requires media support (not endcord-lite). Currently does nothing.
 - `inline_media_height = 10`  
     Height of DISPLAYED image in chat. In number of characters.
-- `inline_media_download_size = 256`  
-    Height of DOWNLOADED image thumb for chat inline media. In pixels.
+- `inline_media_quality = "low"`  
+    Quality of downloaded image thumb for chat inline media. Has no effect in endcord-lite. Possible options are: `lossless`, `high`, `'low`.
 - `rpc_external = True`  
     Whether to use external resources for Rich Presence (like custom pictures).
 - `emoji_as_text = False`  
@@ -246,7 +246,7 @@ Note: always put string in `""`. To use `"` inside the string escape it like thi
     Formatting for message reactions string. It is bellow last newline string. See [format_reactions](#format_reactions) for more info.
 - `format_interaction = " ╭──⤙ %global_name used [%command]"`  
     Formatting for bot interaction string. It is above message base. See [format_interaction](#format_interaction)
-- `format_one_reaction = "%count:%reaction"`  
+- `format_one_reaction = "[]%count:%reaction]"`  
     Formatting for single reaction string. Reactions string is assembled by joining these strings with `reactions_separator` in between. See [format_one_reaction](#format_one_reaction) for more info.
 - `format_timestamp = "%H:%M"`  
     Format for timestamps in messages. Same as [datetime format codes](https://docs.python.org/3/library/datetime.html#strftime-and-strptime-format-codes)
@@ -278,7 +278,7 @@ Note: always put string in `""`. To use `"` inside the string escape it like thi
     A string that replaces `%app` in the message format when the message is sent from app or webhook.
 - `quote_character = "║"`  
     A character that is prepended to each line of single or multiline quote.
-- `reactions_separator = "; "`  
+- `reactions_separator = " "`  
     A string placed between two reactions.
 - `tabs_separator = " | "`  
     A string placed between two tabs.

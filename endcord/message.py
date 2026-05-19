@@ -24,6 +24,11 @@ def generate_timestamp(timestamp, timestamp_format, unix=False):
     return f"<t:{int(time_obj.timestamp())}:{timestamp_format}>"
 
 
+def quote(text):
+    """Prepend '> ' to text and to each newline"""
+    return f"> {text.replace("\n", "\n> ")}"
+
+
 def prepare_embeds(embeds, message_content):
     """Prepare message embeds"""
     ready_embeds = []
@@ -44,11 +49,13 @@ def prepare_embeds(embeds, message_content):
                 skip_main_url = True
 
         if "author" in embed and "name" in embed["author"] and "giphy.com/" not in embed["url"]:
-            content.append(embed["author"]["name"])
+            name = embed["author"]["name"]
+            if name not in embed.get("title", "") and name not in embed.get("description", ""):
+                content.append(quote(name))
         if "title" in embed:
-            content.append(embed["title"])
-        if "description" in embed:
-            content.append(embed["description"])
+            content.append(quote(embed["title"]))
+        if "description" in embed and (not main_url or "youtube." not in main_url):   # skip long descriptions for yt
+            content.append(quote(embed["description"]))
 
         # check for all urls in content so far and set to media = false
         for line in content:
@@ -56,8 +63,8 @@ def prepare_embeds(embeds, message_content):
 
         if "fields" in embed:
             for field in embed["fields"]:
-                content.append(field["name"])
-                content.append(field["value"])
+                content.append(quote(field["name"]))
+                content.append(quote(field["value"]))
             media += [False] * len(re.findall(match_url, field["name"] + "\n" + field["value"]))
         if "thumbnail" in embed:
             proxy_url = embed["thumbnail"]["proxy_url"]
@@ -70,7 +77,8 @@ def prepare_embeds(embeds, message_content):
                 hw = (embed["image"]["height"], embed["image"]["width"])
             media.append(True)
         if "video" in embed and "url" in embed["video"]:
-            content.append(embed["video"]["url"])
+            if "youtube." not in embed["video"]["url"]:
+                content.append(embed["video"]["url"])
             if not skip_main_url:
                 main_url = embed["video"]["url"]
             if not proxy_url and "proxy_url" in embed["video"]:
@@ -78,7 +86,7 @@ def prepare_embeds(embeds, message_content):
                 hw = (embed["video"]["height"], embed["video"]["width"])
             media.append(True)
         if "footer" in embed and "text" in embed["footer"]:
-            content.append(embed["footer"]["text"])
+            content.append(quote(embed["footer"]["text"]))
             media += [False] * len(re.findall(match_url, embed["footer"]["text"]))
 
         content = "\n".join(content)

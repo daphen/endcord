@@ -1158,4 +1158,8 @@ def command_string(text):
             cmd_type = 0
             cmd_args = {"value": 1}
 
+    # 82 - SEND_AS_FILE
+    elif text_lower.startswith("send_as_file"):
+        cmd_type = 82
+
     return cmd_type, cmd_args

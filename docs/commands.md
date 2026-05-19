@@ -134,6 +134,8 @@
     `+` and `-` can be prepended to value so it will increment it - useful for binding this command to a key.  
 - `voice_set_input_device [name]`  
     Set input device from provided list of devices. Selection is persisted across sessions. If device is unavailable, default one will be selected automatically.
+- `send_as_file`  
+    Upload currently typed text as txt file attachment.
 - `generate_invite *[duration] *[limit]`  
     Generate invite to current server with custom expiration `duration` and uses `limit`. Set to 0 for infinite. Invite URL will be copied to clipboard.
     `duration` can be: `4w3d5h30m10s` where `w`is weeks, `d` is days..., can be used partially and mixed: `5h1w`. Default is 7 days and infinite uses.

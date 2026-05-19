@@ -273,6 +273,8 @@ def query_terminal(query, timeout=0.1, read_bytes=1024):
 def get_font_size():
     """Query font size from terminal"""
     response = query_terminal(b"\033[14t")
+    if not response:
+        return None, None
     parts = response.lstrip("\033[").rstrip("t").split(";")
     if len(parts) != 3:
         return None, None

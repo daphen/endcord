@@ -789,7 +789,7 @@ class TUI():
                     self.input_buffer[self.assist_start-1] in ASSIST_TRIGGERS
                 ):
                     assist_type = ASSIST_TRIGGERS.index(self.input_buffer[self.assist_start-1]) + 1
-                    if self.assist_start != 1 and (self.input_buffer[self.assist_start-2] not in (" ", "\n") or self.input_buffer[self.assist_start] in (" ", "\n")):
+                    if self.assist_start != 1 and (self.input_buffer[self.assist_start-2] not in (" ", "\n", "+") or self.input_buffer[self.assist_start] in (" ", "\n")):
                         # skip trigger if no space before it
                         if self.instant_assist:
                             return self.input_buffer, 5
