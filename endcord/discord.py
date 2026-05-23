@@ -719,6 +719,8 @@ class Discord():
         connection = self.get_connection(url_object.netloc, 443)
         connection.request("GET", url_object.path + "?" + url_object.query, message_data, self.header)
         response = connection.getresponse()
+        if response.status != 200:
+            return None
 
         extension = response.getheader("Content-Type").split("/")[-1].replace("jpeg", "jpg")
         destination = os.path.join(save_path, file_name)

@@ -445,22 +445,14 @@ Then force build.py to skip auto-python setup: `uv run -p 3.13 build.py`, and ad
 7. This is your discord token. **Do not share it!**
 
 ### To further decrease probability of getting banned
-Endcord does its best to avoid causing any suspicious activity, so using it as-is is pretty much enough, but most important steps are:
+Endcord does its best to avoid causing any suspicious activity, so using it as-is is pretty much enough.
 - Do not use endcord to perform any out-of-ordinary actions (i.e. self-bots). Third party clients can sometimes trip anti-spam heuristic algorithm for catching self-bots.
-- Do not use endcord at the same time with the client from which you coped token from, it might be it suspicios to have 2 clients using same token at the same time.
+- Do not use endcord at the same time with the client from which you copied token from, it might be suspicios to have 2 clients using same token at the same time.
 - Do not use same token across different third party clients.
 - Do not use `--token` flag, endcord automatically refreshes token stored with profile manager, so there is no need to update it manually.
-- Increase `limit_channel_cache` in config - so REST API is not called on every channel switch. This will also slightly increase RAM and CPU usage.
 - `anonymous` mode in `client_properties` setting might be more risky than `default` mode.
-- If endcord hasnt been updated in a while, set `custom_user_agent` to the one found in API requests in official Discord client.
 - Do not set invalid `custom_user_agent` setting, and try to match it with your OS.
-- Do not use public proxy, like VPN or TOR.
-Less important steps is to decrease REST API calls, which might have little to no effect:
-- Discord REST API is called (most notably) each time client is started, when channel is changed, app command is sent and message is seen or sent. It would be best to not abuse these actions in order to reduce REST API calls.
-- Do not leave endcord on busy channels running in background.
-- Sending ack (when channel is marked as seen) is throttled by endcord to 5s (configurable).
-- Disable `rpc_external` in config - it calls REST API for fetching external resources for Rich Presence, but it shouldn't be critical.
-- Disable `send_typing` in config - it calls REST API every 7s when typing, but it shouldn't be critical.
+- Do not use public proxy, like VPN or TOR.  
 
 ### What if you get banned?
 You can write to Discord Support team: https://dis.gd/request.  

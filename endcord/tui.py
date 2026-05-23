@@ -269,6 +269,8 @@ class TUI():
         self.corner_ur = config["border_corners"][2]
         self.corner_dl = config["border_corners"][1]
         self.corner_dr = config["border_corners"][3]
+        self.have_scrollbar = config["draw_scrollbar"] and self.bordered
+        self.scrollbar_char = config["scrollbar_character"]
         self.hline = config["tree_drop_down_hline"]
         self.tab_spaces = int(config["tab_spaces"])
         self.vim_mode = config["vim_mode"]
@@ -612,7 +614,7 @@ class TUI():
         # redraw
         self.draw_border(win_prompt_input_line, top=False)
         self.draw_status_line()
-        self.draw_border(chat_hwyx, top=not(self.have_title))
+        self.draw_border(chat_hwyx, top=not(self.have_title), right=not(self.draw_scrollbar))
         self.update_prompt(self.prompt)
         self.spellcheck()
         self.draw_input_line()
@@ -665,7 +667,7 @@ class TUI():
         self.win_chat = self.screen.derwin(*chat_hwyx)
         self.chat_hw = self.win_chat.getmaxyx()
         if self.bordered:
-            self.draw_border(chat_hwyx, top=not(self.have_title))
+            self.draw_border(chat_hwyx, top=not(self.have_title), right=not(self.draw_scrollbar))
             self.screen.noutrefresh()
         return common_h
 
@@ -1391,7 +1393,43 @@ class TUI():
             except curses.error:
                 # exception will happen when window is resized to smaller w dimensions
                 self.resize()
+        if self.have_scrollbar:
+            self.draw_scrollbar()
         self.execute_extensions_methods("on_chat_draw", cache=True)
+
+
+    def draw_scrollbar(self):
+        """Draw scrollbar at the right side of the chat"""
+        if not self.have_scrollbar:
+            return
+        h, w = self.chat_hw
+        y, x = self.win_chat.getbegyx()
+        abs_x = x + w
+        total_lines = len(self.chat_buffer)
+
+        # clculate thumb size and pos
+        if total_lines < h:
+            thumb_size = 0
+            thumb_pos = 0
+        else:
+            thumb_size = max(2, h * h // total_lines)
+            max_pos = h - thumb_size
+            max_index = total_lines - h
+            thumb_pos = max(0, min(max_pos, max_pos - int(self.chat_index * max_pos / max_index)))
+
+        # draw thumb and border
+        self.screen.vline(y, abs_x, curses.ACS_VLINE, h, curses.color_pair(self.default_color))
+        if thumb_size > 0:
+            for rel_y in range(thumb_size):
+                 self.screen.addch(y + rel_y + thumb_pos, abs_x, self.scrollbar_char, curses.color_pair(self.default_color))
+
+        # draw corners
+        try:
+            self.screen.addstr(y - 1, abs_x, self.corner_ur, curses.color_pair(self.default_color))
+            # it errors when drawing in bottom-right cell, but still draws it
+            self.screen.addstr(y + h, abs_x, self.corner_dr, curses.color_pair(self.default_color))
+        except curses.error:
+            pass
 
 
     def set_wide(self, chat_map):

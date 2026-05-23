@@ -80,6 +80,8 @@ Note: always put string in `""`. To use `"` inside the string escape it like thi
     How many lines are scrolled at once when scrolling with mouse.
 - `mouse_scroll_selection = False`  
     Scroll selection instead content, disables mouse_scroll_sensitivity.  
+- `draw_scrollbar = True`  
+    Wether to draw scrollbar at the right side of the chat.
 - `screen_update_delay = 0.01`  
     Delay in seconds before screen is updated. Limited to min 0.01.  
     Too low value will cause visual "glitches". Increasing value will add latency between performed action and visual feedback.
@@ -280,6 +282,8 @@ Note: always put string in `""`. To use `"` inside the string escape it like thi
     A string that replaces `%app` in the message format when the message is sent from app or webhook.
 - `quote_character = "║"`  
     A character that is prepended to each line of single or multiline quote.
+- `scrollbar_character = "┃"`  
+    A character used to draw scrollbar on the right side of the chat.
 - `reactions_separator = " "`  
     A string placed between two reactions.
 - `tabs_separator = " | "`  
