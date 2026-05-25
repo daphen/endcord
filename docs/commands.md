@@ -156,6 +156,8 @@
     Everything after these flags is considered as message content.  
 - `redraw`  
     Redraw UI if it ever gets messed up.
+- `switch_profile [name/number]`  
+    Switch to different local profile, as available in profile manager. Profiles will be shown in assist. Current session will be ended and new one will be initialized. Log will be cleaned because this completely restarts endcord.
 - `check_for_updates *open`  
     Check endcord and extensions for updates and optionally open github release for new endcord version.
 - `search_extensions`  

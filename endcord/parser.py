@@ -1162,4 +1162,12 @@ def command_string(text):
     elif text_lower.startswith("send_as_file"):
         cmd_type = 82
 
+    # 83 - SWITCH_PROFILE
+    elif text_lower.startswith("switch_profile"):
+        cmd_type = 83
+        try:
+            cmd_args = {"value": int(text[15:])}
+        except ValueError:
+            cmd_args = {"value": text[15:].strip()}
+
     return cmd_type, cmd_args

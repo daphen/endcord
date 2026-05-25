@@ -83,6 +83,7 @@ COMMAND_ASSISTS = (
     ("tree_select *[server/channel], *[next/prev] - select next or previous server or channel in tree", "tree_select"),
     ("send_message * - see commands documentation for options", "send_message"),
     ("redraw - redraw UI if it ever gets messed up", "redraw"),
+    ("switch_profile [name/number] - switch to different local profile", "switch_profile"),
     ("check_for_updates *open - check endcord and extensions for updates and open gh release", "check_for_updates"),
     ("search_extensions - search all endcord extensions on GitHub", "search_extensions"),
     ("install_extension *[url] - install extension from specified git url or update all", "install_extension"),

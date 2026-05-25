@@ -31,6 +31,13 @@ match_emoji = re.compile(r"(?<!\\):[^:\s]+:")
 EMOJI_DATA = {}   # delayed load for faster startup
 
 
+def get_executable():
+    """Get executable path and arguments for current run"""
+    if "__compiled__" in globals() or getattr(sys, "frozen", False):   # built with nuitka or pyinstaller
+        return [os.path.abspath(sys.argv[0]), *sys.argv[1:]]
+    return [sys.executable, *sys.argv]
+
+
 def ensure_terminal():
     """
     Ensure that app is running inside a terminal emulator, launch inside terminal if not.
@@ -67,14 +74,10 @@ def ensure_terminal():
         print("No terminal emulator found.", file=sys.stderr)
         sys.exit(1)
 
-    if "__compiled__" in globals() or getattr(sys, "frozen", False):   # built with nuitka or pyinstaller
-        cmd = [os.path.abspath(sys.argv[0])] + sys.argv[1:]
-    else:
-        cmd = [sys.executable] + sys.argv
     if terminal in ("gnome-terminal", "kgx"):
-        subprocess.Popen([terminal, "--"] + cmd)
+        subprocess.Popen([terminal, "--"] + get_executable())
     else:
-        subprocess.Popen([terminal, "-e"] + cmd)
+        subprocess.Popen([terminal, "-e"] + get_executable())
     sys.exit(0)
 
 

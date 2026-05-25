@@ -14,7 +14,6 @@ Add inline media drawing
         add undraw_over_curses to terminal utils
 
 Add colors and formatting in assist window
-Add ability to switch profile without closing
 Add multiline reactions
 Add favorite gifs
 Add spoiler to inline media (double click to spoil, next to open)

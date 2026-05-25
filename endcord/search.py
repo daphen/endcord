@@ -6,6 +6,8 @@
 import heapq
 import importlib.util
 import re
+from itertools import chain
+from datetime import datetime
 
 from endcord import utils
 
@@ -510,7 +512,7 @@ def search_tabs(tabs, query, limit=50, score_cutoff=15):
 
 
 def search_mics(devices, query, limit=50, score_cutoff=15):
-    """Generic search for microphones"""
+    """Search for microphones"""
     results = []
     worst_score = score_cutoff
     results.append(("Auto", "voice_set_input_device " + "Auto", score_cutoff + fuzzy_match_score(query, "Auto") + 0.1))
@@ -525,6 +527,28 @@ def search_mics(devices, query, limit=50, score_cutoff=15):
             worst_score = results[0][2]
 
     results.append(("OFF", "voice_set_input_device " + "OFF", score_cutoff + fuzzy_match_score(query, "OFF") + 0.1))
+    return sorted(results, key=lambda x: x[2], reverse=True)
+
+
+def search_profiles(profiles, query, limit=50, score_cutoff=15):
+    """Search for profiles"""
+    results = []
+    worst_score = score_cutoff
+    keyring_len = len(profiles["keyring"])
+
+    for num, profile in enumerate(chain(profiles["keyring"], profiles["plaintext"])):
+        score = fuzzy_match_score(query, profile["name"])
+        if not query:
+            score = score_cutoff
+        elif score < worst_score and query:
+            continue
+        keyring = "keyring" if num < keyring_len else "plaintext"
+        active = "[Active]" if profile["name"] == profiles["selected"] else ""
+        heapq.heappush(results, (f"{profile["name"]} - ({keyring}) {active}", "switch_profile " + profile["name"], score))
+        if len(results) > limit:
+            heapq.heappop(results)
+            worst_score = results[0][2]
+
     return sorted(results, key=lambda x: x[2], reverse=True)
 
 

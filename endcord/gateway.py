@@ -43,7 +43,7 @@ DEFAULT_CAPABILITIES = 30717
 DEFAULT_INTENTS = 50364033
 QOS_HEARTBEAT = True
 QOS_PAYLOAD = {"ver": 26, "active": True, "reason": "foregrounded"}
-inflator = zlib.decompressobj()
+inflator = None
 logger = logging.getLogger(__name__)
 status_unpacker = struct.Struct("!H")
 
@@ -98,6 +98,8 @@ class Gateway():
             except ValueError:
                 pass
 
+        reset_inflator()
+
         self.extensions = []
         self.client_prop = client_prop
         self.init_time = time.time() * 1000
@@ -105,6 +107,7 @@ class Gateway():
         self.proxy = urllib.parse.urlsplit(proxy)
         self.bot = self.token.startswith("Bot")
         self.run = True
+        self.stop_event = threading.Event()
         self.wait = False
         self.state = 0
         self.heartbeat_received = True
@@ -256,14 +259,13 @@ class Gateway():
     def stats_rotator(self):
         """Rotate stats every 1h"""
         last_rotation = int(time.time())
-        while self.run:
+        while self.run and not self.stop_event.wait(30):
             if int(time.time()) > last_rotation + 3600:
                 last_rotation = int(time.time())
                 self.last_gateway_events_per_h = self.gateway_events_per_h
                 self.last_gateway_msg_per_h = self.gateway_msg_per_h
                 self.gateway_events_per_h = 0
                 self.gateway_msg_per_h = 0
-            time.sleep(30)
 
 
     def connect_ws(self, resume=False):
@@ -297,6 +299,7 @@ class Gateway():
     def stop(self):
         """Stop gatway"""
         self.run = False
+        self.stop_event.set()
         self.disconnect_ws()
 
 
@@ -1065,7 +1068,7 @@ class Gateway():
                             nonce=message["channel_id"],
                         )
                     if not is_relevant_message(optext, message, self.active_channel, self.channel_cache, self.guilds, self.my_id, self.my_roles):# and not self.execute_extensions_method_first("on_message_event_is_irrelevant", message, optext, cache=True):
-                        if message["author"]["id"] == self.my_id:   # dont process my messages from other clients 
+                        if message["author"]["id"] == self.my_id:   # dont process my messages from other clients
                             continue
                         self.messages_buffer.append({
                             "op": "MESSAGE_CREATE_QUICK",

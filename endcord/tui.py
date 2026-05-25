@@ -488,9 +488,15 @@ class TUI():
         return result
 
 
+    def stop(self):
+        """Stop all threads"""
+        self.run = False
+        self.need_update.set()
+
+
     def screen_update(self):
         """Thread that updates drawn content on physical screen"""
-        while True:
+        while self.run:
             self.need_update.wait()
             # here must be delay, otherwise output gets messed up
             with self.lock:

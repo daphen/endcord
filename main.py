@@ -7,6 +7,7 @@ import curses
 import importlib.util
 import logging
 import os
+import shutil
 import signal
 import sys
 import threading
@@ -26,6 +27,7 @@ default_config_path = peripherals.config_path
 log_path = peripherals.log_path
 threading.stack_size(512 * 1024)
 uses_pgcurses = hasattr(curses, "PGCURSES")
+run = True
 
 logger = logging
 logging.basicConfig(
@@ -163,7 +165,11 @@ def main(args):
 
     try:
         from endcord import app
-        curses.wrapper(app.Endcord, config_data, keybindings, command_bindings, profiles, VERSION)
+        endcord = app.Endcord
+        curses.wrapper(endcord, config_data, keybindings, command_bindings, profiles, VERSION)
+        if hasattr(app, "target_profile"):
+            cmd = utils.get_executable()
+            os.execv(cmd[0], cmd + ["--profile", app.target_profile])
     except curses.error as e:
         if str(e) != "endwin() returned ERR":
             logger.error(traceback.format_exc())

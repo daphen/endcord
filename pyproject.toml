@@ -7,9 +7,9 @@ requires-python = ">=3.12"
 dependencies = [
     "certifi>=2026.2.25; sys_platform == 'darwin'",
     "filetype>=1.2.0",
-    "numpy>=2.4.5",
+    "numpy>=2.4.6",
     "orjson>=3.11.9",
-    "protobuf>=7.34.1",
+    "protobuf>=7.35.0",
     "psutil>=7.2.1; sys_platform != 'linux'",
     "pycryptodome>=3.23.0",
     "pysocks>=1.7.1",
@@ -27,8 +27,8 @@ dependencies = [
 
 [dependency-groups]
 build = [
-    "cython>=3.2.4",
-    "nuitka[onefile]>=4.1.0",
+    "cython>=3.2.5",
+    "nuitka[onefile]>=4.1.1",
     "pyinstaller>=6.20.0",
     "setuptools>=82.0.0",
 ]
