@@ -118,6 +118,22 @@ def detect_runtime():
     return "source"
 
 
+def remove_args(cmd, *args):
+    """Remove args and their values from command list"""
+    result = []
+    skip = False
+    for i, arg in enumerate(cmd):
+        if skip:
+            skip = False
+            continue
+        if arg in args:
+            if i + 1 < len(cmd) and not cmd[i + 1].startswith("-"):
+                skip = True
+            continue
+        result.append(arg)
+    return result
+
+
 def get_extensions(path):
     """Get list of valid extensions from specified path"""
     extensions = []

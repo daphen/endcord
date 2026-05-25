@@ -169,6 +169,7 @@ def main(args):
         curses.wrapper(endcord, config_data, keybindings, command_bindings, profiles, VERSION)
         if hasattr(app, "target_profile"):
             cmd = utils.get_executable()
+            cmd = utils.remove_args(cmd, "-a", "--manager", "-p", "--profile")
             os.execv(cmd[0], cmd + ["--profile", app.target_profile])
     except curses.error as e:
         if str(e) != "endwin() returned ERR":
