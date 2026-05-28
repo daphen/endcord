@@ -1905,7 +1905,9 @@ class Endcord:
                         else:
                             self.open_guild(0, select=True, open_only=True)
                             self.tui.tree_select(self.tree_pos_from_id(channel_id))
-                        self.switch_channel(channel_id, channel_name, guild_id, guild_name, parent_hint=parent_hint)
+                        # Upstream switch_channel dropped channel_name /
+                        # guild_name params and moved parent_hint up.
+                        self.switch_channel(channel_id, guild_id, parent_hint=parent_hint)
 
             # action 55: jump to the channel with the most recent
             # unread message (any unread DM, or any guild channel with
@@ -1954,7 +1956,7 @@ class Endcord:
                                 tree_pos = self.tree_pos_from_id(channel_id)
                                 if tree_pos is not None:
                                     self.tui.tree_select(tree_pos)
-                            self.switch_channel(channel_id, channel_name, guild_id, guild_name, parent_hint=parent_hint)
+                            self.switch_channel(channel_id, guild_id, parent_hint=parent_hint)
                 except Exception as e:
                     logger.exception("jump_latest_unread crashed: %s", e)
                     self.update_extra_line(f"Jump-to-unread failed: {e}", timed=True)
