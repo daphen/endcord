@@ -6367,7 +6367,15 @@ class Endcord:
         # Reserve vertical space for image thumbnails before computing
         # the line maps (the insert shifts indices in chat / chat_map).
         if self.pfp_renderer.enabled:
-            self._reserve_image_rows()
+            # Incremental only on a pure append (change_type == 1).
+            # Full regenerate (None) AND any partial that rebuilds an
+            # existing message (edit/delete = type 2,3,20) wipes the
+            # previously-inserted reserve rows from chat[], so we
+            # have to recompute from scratch. Preserving _image_geom
+            # then would skip re-insertion and the image would overlay
+            # subsequent messages.
+            incremental = change_id is not None and change_type == 1
+            self._reserve_image_rows(incremental=incremental)
         self.tui.set_wide(self.chat_map)
         self.tui.set_pfp_lines(self._build_pfp_lines())
         self.tui.set_emoji_lines(self._build_emoji_lines())
@@ -6810,7 +6818,7 @@ class Endcord:
             self.tui.set_tray_icon(tray_state)
 
 
-    def _reserve_image_rows(self):
+    def _reserve_image_rows(self, incremental=False):
         """For each `[image attachment]:` line, measure the source
         image's aspect ratio and insert the right number of blank rows
         below the image line so the thumbnail can render at its native
@@ -6837,12 +6845,19 @@ class Endcord:
             return
         image_types_short = ("image", "png", "jpg", "jpeg", "gif", "webp")
 
-        # Drop entries whose message is no longer in the buffer (it
-        # scrolled out, got deleted, or the buffer trim cut it).
-        live_ids = {m.get("id") for m in self.messages if m.get("id")}
-        self._image_geom = {
-            k: v for k, v in self._image_geom.items() if k[0] in live_ids
-        }
+        # On a full chat regenerate (resize, channel switch, scroll-
+        # back fetch) the formatter rebuilds chat[] from scratch — so
+        # any reserve rows we previously inserted are gone. We have
+        # to re-measure + re-insert from a clean slate.
+        if not incremental:
+            self._image_geom = {}
+        else:
+            # Incremental path: drop entries whose message is no
+            # longer in the buffer (deleted / trimmed out).
+            live_ids = {m.get("id") for m in self.messages if m.get("id")}
+            self._image_geom = {
+                k: v for k, v in self._image_geom.items() if k[0] in live_ids
+            }
 
         # Find NEW "[image attachment]:" lines (only re-emitted for new
         # messages by the formatter's incremental path) and populate
