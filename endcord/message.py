@@ -294,8 +294,8 @@ def prepare_messages(data, have_channel_id=False, clean=True):
     messages = []
     for message in data:
         ready_message = prepare_message(message)
-        # Note: previously deleted ready_message["avatar"] when clean=True;
-        # we keep it so inline-PFP rendering can find the avatar hash.
+        if clean:
+            del ready_message["avatar"]
         messages.append(ready_message)
         if have_channel_id:
             messages[-1]["channel_id"] = message["channel_id"]

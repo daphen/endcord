@@ -35,7 +35,6 @@ from endcord import (
     parser,
     peripherals,
     perms,
-    pfp as pfp_mod,
     rpc,
     search,
     terminal_utils,
@@ -271,13 +270,6 @@ class Endcord:
         threading.Thread(target=self.gateway.connect, daemon=True).start()
         self.downloader = downloader.Downloader(config["proxy"])
         self.tui = tui.TUI(self.screen, self.config, keybindings, command_bindings)
-        # Inline avatars in chat (Kitty-only; defaults off — set
-        # inline_pfp = True in config.ini to enable).
-        self.pfp_renderer = pfp_mod.PfpRenderer(
-            peripherals.cache_path, self.discord,
-            enabled=bool(config.get("inline_pfp", False)),
-        )
-        self.tui.set_pfp_renderer(self.pfp_renderer)
         if self.fun:
             today = (time.localtime().tm_mon, time.localtime().tm_mday)
             self.fun = 2 if (10, 25) <= today <= (11, 8) else self.fun
@@ -292,26 +284,6 @@ class Endcord:
         self.tui.update_chat(self.chat, [[[self.colors[0]]]] * len(self.chat))
         self.tui.update_status_line(" CONNECTING")
         self.my_id = None   # will be taken from gateway in main()
-        # If we're going to draw inline avatars, reserve N leading cols
-        # on every chat line: pfp_cols avatar + 1 col gap before content.
-        # NOTE: only prepend pad once. format_message has `\n%content`
-        # but the body content after the newline is processed via the
-        # wrap loop which uses format_newline (already padded), so adding
-        # pad after `\n` here would double-indent body lines.
-        if self.pfp_renderer.enabled:
-            # 1-col gap between the avatar and the message text.
-            pad = " " * (self.pfp_renderer.pfp_cols + 1)
-            self.config["format_message"] = pad + self.config["format_message"]
-            # Strip the original leading from format_newline so wrapped
-            # body lines start at the same column as the header.
-            fmt_nl = self.config["format_newline"]
-            content_at = fmt_nl.find("%content")
-            if content_at > 0:
-                fmt_nl = fmt_nl[content_at:]
-            self.config["format_newline"] = pad + fmt_nl
-            self.config["format_reply"] = pad + self.config["format_reply"]
-            self.config["format_reactions"] = pad + self.config["format_reactions"]
-            self.config["format_interaction"] = pad + self.config["format_interaction"]
         self.formatter = formatter.ChatGenerator(
             self.config,
             self.colors,
@@ -586,54 +558,10 @@ class Endcord:
                             self.message_send_queue.get_nowait()
                         except queue.Empty:
                             break
-                elif success is False and func == self.discord.send_message:
-                    # API rejected the send — show what Discord said and
-                    # mark the pending bubble as failed so it doesn't sit
-                    # there looking like it was delivered.
-                    err = self.discord.last_send_error or {}
-                    self.discord.last_send_error = None
-                    code = err.get("error_code")
-                    status = err.get("status")
-                    label = {
-                        50035: "invalid form (too long? bad mention?)",
-                        50007: "cannot send to this user",
-                        50013: "missing permissions",
-                        20009: "explicit content blocked",
-                        40005: "request entity too large",
-                    }.get(code, f"code {code}" if code else f"HTTP {status}")
-                    self.update_extra_line(
-                        f"Send failed: {label}", timed=True,
-                    )
-                    self._mark_pending_failed(err.get("nonce"))
             except Exception:
                 pass
             finally:
                 self.message_send_queue.task_done()
-
-
-    def _mark_pending_failed(self, nonce):
-        """Tag the pending message with the given nonce as failed so the
-        renderer can colour it distinctly (rather than leaving it stuck
-        looking like it was delivered)."""
-        if not nonce:
-            return
-        for msg in self.messages:
-            if msg.get("nonce") == nonce or msg.get("id") == nonce:
-                # The formatter treats `"pending" in message` (key
-                # existence, not value) as "still sending" — so we must
-                # `del`, not assign False, to drop the pending style.
-                msg.pop("pending", None)
-                # Prefix the content with a visible marker. Reusing the
-                # deleted-style colour would also work; this gives a
-                # clear text indication regardless of theme.
-                content = msg.get("content") or ""
-                if not content.startswith("[SEND FAILED] "):
-                    msg["content"] = "[SEND FAILED] " + content
-                break
-        try:
-            self.update_chat(scroll=False)
-        except Exception:
-            pass
 
 
     def put_to_message_sender(self, func, *args, **kwargs):
@@ -1168,11 +1096,6 @@ class Endcord:
             self.update_chat(keep_selected=False, select_message_index=select_message_index, select_unread=True)
         else:
             self.tui.update_chat(self.chat, self.chat_format)
-        # Warm the avatar cache for all distinct authors in this channel
-        # so the first render of each user isn't a cold disk-read +
-        # Kitty-transmit in the draw thread.
-        if self.pfp_renderer.enabled:
-            self._prefetch_avatars()
         self.set_channel_seen(channel_id, self.get_chat_last_message_id(), force_remove_notify=True)   # right after update_chat so new_unreads is determined
         if not guild_id:   # no member list in dms
             self.tui.remove_member_list()
@@ -1807,151 +1730,6 @@ class Endcord:
                     continue
                 self.go_replied(msg_index)
 
-            # chat_msg_up / chat_msg_down: jump message-by-message.
-            # self.messages is newest-first (insert(0, ...)), so visually-up
-            # (older) means a HIGHER index, visually-down (newer) means lower.
-            elif (action == 50 or action == 51) and self.messages:
-                self.restore_input_text = (input_text, "standard")
-                # When the selection is hidden, first press lands on the
-                # newest message (matches j/k semantics: k from hidden
-                # highlights bottom-of-viewport).
-                if chat_sel >= 0:
-                    cur = self.lines_to_msg(chat_sel, space=True)
-                    if cur is None:
-                        continue
-                    target = cur + (1 if action == 50 else -1)
-                else:
-                    target = 0
-                if 0 <= target < len(self.messages):
-                    self.tui.set_selected(self.msg_to_lines(target, smart=True))
-
-            # jump_next_media / jump_prev_media. "next" = newer (visually
-            # down, lower index); "prev" = older (visually up, higher index).
-            # When walking older direction, fetch additional chunks from
-            # the server if the current buffer is exhausted (up to 4
-            # extra chunks, ≈100 more messages).
-            elif (action == 52 or action == 53) and self.messages:
-                self.restore_input_text = (input_text, "standard")
-                direction = -1 if action == 52 else 1
-                # When selection is hidden, include the newest message in
-                # the search so Ctrl+U lands on it if it has media (matches
-                # the j/k mental model: first press = newest).
-                if chat_sel >= 0:
-                    cur_idx = self.lines_to_msg(chat_sel, space=True)
-                    if cur_idx is None:
-                        continue
-                    start_offset = direction
-                else:
-                    cur_idx = 0
-                    start_offset = 0
-                cur_id = self.messages[cur_idx]["id"]
-                found_idx = None
-                for _ in range(5):
-                    # Re-locate current msg by id; trimming may have shifted indices.
-                    cur_idx = next((i for i, m in enumerate(self.messages) if m["id"] == cur_id), None)
-                    if cur_idx is None:
-                        break
-                    start = cur_idx + start_offset
-                    end = -1 if direction == -1 else len(self.messages)
-                    for i in range(start, end, direction):
-                        m = self.messages[i]
-                        if m.get("embeds") or m.get("stickers"):
-                            found_idx = i
-                            break
-                    if found_idx is not None:
-                        break
-                    # No match in current buffer; fetch older chunk if walking
-                    # backward in time. Newer direction has nothing to fetch
-                    # (gateway delivers new messages as they arrive).
-                    if direction == 1 and not self.chat_end:
-                        self.get_chat_chunk(past=True, scroll=False)
-                    else:
-                        break
-                if found_idx is not None:
-                    # Land on the line containing the URL/embed if there is
-                    # one, so `v` works without an extra step. Fall back to
-                    # the message header.
-                    target_line = None
-                    for li, lm in enumerate(self.chat_map):
-                        if lm and lm[0] == found_idx and lm[5] and lm[5][0]:
-                            target_line = li
-                            break
-                    if target_line is None:
-                        target_line = self.msg_to_lines(found_idx, smart=True)
-                    self.tui.set_selected(target_line)
-                else:
-                    self.update_extra_line("No more media in this direction.", timed=True)
-
-            # action 54: jump to previous (last visited) channel
-            elif action == 54:
-                self.restore_input_text = (input_text, "standard")
-                recent = self.state.get("recent_channels", []) if self.state else []
-                if len(recent) < 2:
-                    self.update_extra_line("No previous channel.", timed=True)
-                else:
-                    prev_id = recent[-2]
-                    channel_id, channel_name, guild_id, guild_name, parent_hint = self.find_parents_from_id(prev_id)
-                    if channel_id is None:
-                        self.update_extra_line("Previous channel unavailable.", timed=True)
-                    else:
-                        if guild_id is not None:
-                            self.open_guild(guild_id, select=True, open_only=True)
-                            category_tree_pos = self.tree_pos_from_id(parent_hint)
-                            if category_tree_pos:
-                                self.tui.toggle_category(category_tree_pos, only_open=True)
-                            channel_tree_pos = self.tree_pos_from_id(channel_id)
-                            if channel_tree_pos:
-                                self.tui.tree_select(channel_tree_pos)
-                        else:
-                            self.open_guild(0, select=True, open_only=True)
-                            self.tui.tree_select(self.tree_pos_from_id(channel_id))
-                        self.switch_channel(channel_id, channel_name, guild_id, guild_name, parent_hint=parent_hint)
-
-            # action 55: jump to the channel with the most recent
-            # unread message (any unread DM, or any guild channel with
-            # an explicit @-mention — same set the title-bar notification
-            # badge counts). Snowflake IDs are time-sortable so we pick
-            # the max(last_message_id) among candidates.
-            elif action == 55:
-                self.restore_input_text = (input_text, "standard")
-                best_id = None
-                best_msg_id = -1
-                dm_ids = {dm["id"] for dm in self.dms}
-                for cid, ch in self.read_state.items():
-                    if not ch or not formatter.is_unseen(ch):
-                        continue
-                    is_dm = cid in dm_ids
-                    if not is_dm and not ch.get("mentions"):
-                        continue
-                    try:
-                        lmid = int(ch["last_message_id"])
-                    except (TypeError, ValueError, KeyError):
-                        continue
-                    if lmid > best_msg_id:
-                        best_msg_id = lmid
-                        best_id = cid
-                if best_id is None:
-                    self.update_extra_line("No unread channels.", timed=True)
-                else:
-                    channel_id, channel_name, guild_id, guild_name, parent_hint = self.find_parents_from_id(best_id)
-                    if channel_id is None:
-                        self.update_extra_line("Unread channel unavailable.", timed=True)
-                    else:
-                        if guild_id is not None:
-                            self.open_guild(guild_id, select=True, open_only=True)
-                            category_tree_pos = self.tree_pos_from_id(parent_hint)
-                            if category_tree_pos:
-                                self.tui.toggle_category(category_tree_pos, only_open=True)
-                            channel_tree_pos = self.tree_pos_from_id(channel_id)
-                            if channel_tree_pos:
-                                self.tui.tree_select(channel_tree_pos)
-                        else:
-                            self.open_guild(0, select=True, open_only=True)
-                            tree_pos = self.tree_pos_from_id(channel_id)
-                            if tree_pos is not None:
-                                self.tui.tree_select(tree_pos)
-                        self.switch_channel(channel_id, channel_name, guild_id, guild_name, parent_hint=parent_hint)
-
             # download file
             elif action == 9:
                 self.restore_input_text = (input_text, "standard")
@@ -2020,10 +1798,6 @@ class Endcord:
                     for num in self.get_stuff_from_selected_line(chat_sel, 0):   # get url
                         if urls[num] in embeds:
                             selected_urls.append(urls[num])
-                    if not selected_urls:
-                        # cursor isn't on a URL line of this message; use
-                        # all embeds so v works from anywhere in the message
-                        selected_urls = embeds
                 else:
                     selected_urls = embeds
                 if len(selected_urls) == 1:
@@ -2254,7 +2028,6 @@ class Endcord:
                     self.stop_assist(close=False)
                     self.tui.draw_extra_window(extra_title, extra_body)
                     self.extra_window_open = True
-                    self.tui.set_vim_insert(True)
                 else:
                     self.close_extra_window()
                     self.reset_states()
@@ -3027,7 +2800,6 @@ class Endcord:
                         attachments=this_attachments,
                         stickers=stickers,
                     )
-                    self.stop_assist()
                     self.reset_states(replying=True)
                     continue
 
@@ -4822,7 +4594,6 @@ class Endcord:
             "username": self.my_user_data["username"],
             "global_name": self.my_user_data["global_name"],   # spacebar_fix - get
             "nick": self.my_user_data["nick"],
-            "avatar": (self.my_user_data.get("extra") or {}).get("avatar"),
             "referenced_message": referenced_message,
             "reactions": [],
             "embeds": embeds,
@@ -5156,8 +4927,6 @@ class Endcord:
             self.messages = self.messages[-self.limit_chat_buffer:]
             if new_chunk:
                 self.update_chat(keep_selected=None)
-                if self.pfp_renderer.enabled:
-                    self._prefetch_avatars()
                 # when messages are trimmed, keep same selected position
                 if len(self.messages) != all_msg:
                     selected_msg_new = selected_msg - (all_msg - len(self.messages))
@@ -5844,26 +5613,9 @@ class Endcord:
                 )
 
         elif assist_type == 2:   # username/role
-            # In a DM (no guild_id), the upstream path calls
-            # gateway.request_members(None, ...) which returns nothing,
-            # so @-mention shows no candidates. Fall back to the DM's
-            # own recipients list so the user can tag anyone in the chat.
-            dm_query_results = query_results
-            if not self.active_channel["guild_id"] and not query_results:
-                for dm in self.dms:
-                    if dm["id"] == self.active_channel["channel_id"]:
-                        dm_query_results = [
-                            {
-                                "id": r["id"],
-                                "username": r["username"],
-                                "name": r["global_name"] or "",
-                            }
-                            for r in dm["recipients"]
-                        ]
-                        break
             self.assist_found = search.search_usernames_roles(
                 self.current_roles,
-                dm_query_results,
+                query_results,
                 self.active_channel["guild_id"],
                 self.gateway,
                 assist_word,
@@ -6345,33 +6097,7 @@ class Endcord:
             change_id=change_id,
             change_type=change_type,
         )
-        # Blank out the `:name:` text under every custom emoji so the
-        # image overlay isn't trailed by half-visible characters. Done
-        # before passing chat to the TUI.
-        if self.pfp_renderer.enabled:
-            for i, line in enumerate(self.chat_map):
-                if not (line and line[5] and len(line[5]) > 2 and line[5][2]):
-                    continue
-                if not (0 <= i < len(self.chat)):
-                    continue
-                buf_line = self.chat[i]
-                for r in line[5][2]:
-                    start, end = r[0], r[1]
-                    if start < len(buf_line):
-                        end = min(end, len(buf_line))
-                        buf_line = buf_line[:start] + " " * (end - start) + buf_line[end:]
-                self.chat[i] = buf_line
-            # Note: upstream now does same-author message grouping natively
-            # in formatter.py via the `message_grouping` config option, so
-            # the post-format pass we used to call here was removed.
-        # Reserve vertical space for image thumbnails before computing
-        # the line maps (the insert shifts indices in chat / chat_map).
-        if self.pfp_renderer.enabled:
-            self._reserve_image_rows()
         self.tui.set_wide(self.chat_map)
-        self.tui.set_pfp_lines(self._build_pfp_lines())
-        self.tui.set_emoji_lines(self._build_emoji_lines())
-        self.tui.set_image_lines(self._build_image_lines())
 
         if keep_selected:
             selected_msg = selected_msg + change_amount
@@ -6770,26 +6496,6 @@ class Endcord:
                     self.tui.tree_select(num)
                     break
 
-        # Notification badge for hidden-tree mode: count unread DMs
-        # and guild channels with explicit @mentions. We compute from
-        # raw state here (rather than tree_format) because DM codes
-        # and guild-channel codes share the 300-range and can't be
-        # distinguished after the fact.
-        mention_count = 0
-        for dm in self.dms:
-            ch = self.read_state.get(dm["id"])
-            if formatter.is_unseen(ch):
-                mention_count += 1
-        for cid, ch in self.read_state.items():
-            if not ch:
-                continue
-            # Skip DMs (already counted above).
-            if any(dm["id"] == cid for dm in self.dms):
-                continue
-            if formatter.is_unseen(ch) and ch.get("mentions"):
-                mention_count += 1
-        self.tui.set_mention_count(mention_count)
-
         # check for unreads/mentions for tray icon
         if uses_pgcurses:
             if not self.tui.is_window_open and not bool(self.tui.get_chat_selected()[1]):
@@ -6808,231 +6514,6 @@ class Endcord:
                     elif second_digit == 3:
                         tray_state = 1   # unread
             self.tui.set_tray_icon(tray_state)
-
-
-    def _reserve_image_rows(self):
-        """For each `[image attachment]:` line, measure the source
-        image's aspect ratio and insert the right number of blank rows
-        below the image line so the thumbnail can render at its native
-        aspect without overlaying other content.
-
-        Stores `_image_geom` mapping `(msg_num, url) -> (cols, rows)` so
-        `_build_image_lines` can pass the same dimensions to the TUI.
-
-        chat_buffer is rendered bottom-up, so "visually below" the image
-        line at chat[X] is chat[X-1] ... chat[X-rows+1]. Inserting
-        (rows-1) blank lines AT chat[X] pushes the image line up to
-        chat[X+rows-1] and puts the blanks at chat[X..X+rows-2], which
-        is the exact region the image will occupy.
-        """
-        from endcord import pfp as pfp_mod  # local to avoid import cycle
-        self._image_geom = {}
-        if not self.chat_map:
-            return
-        image_types_short = ("image", "png", "jpg", "jpeg", "gif", "webp")
-
-        # msg_num -> list of (line_idx, url) for image attachment lines
-        msg_image_lines = {}
-        for i, line in enumerate(self.chat_map):
-            if not line or line[0] is None:
-                continue
-            msg_num = line[0]
-            if not (0 <= msg_num < len(self.messages)):
-                continue
-            if not (0 <= i < len(self.chat)):
-                continue
-            if "[image" not in self.chat[i]:
-                continue
-            msg_image_lines.setdefault(msg_num, []).append(i)
-
-        # Pair image lines with the message's image embeds (in order),
-        # measure each, and remember dimensions for later use.
-        plan = []   # (line_idx, url, cols, rows)
-        for msg_num, line_indices in msg_image_lines.items():
-            msg = self.messages[msg_num]
-            image_urls = []
-            for embed in msg.get("embeds", []) or []:
-                url = embed.get("url")
-                if not url:
-                    continue
-                etype = (embed.get("type") or "").lower()
-                if etype.startswith("image/") or etype in image_types_short:
-                    image_urls.append(url)
-            for line_idx, url in zip(line_indices, image_urls):
-                dims = self.pfp_renderer.measure_attachment(url)
-                if not dims:
-                    continue
-                cols, rows = dims
-                self._image_geom[(msg_num, url)] = (cols, rows)
-                plan.append((line_idx, url, cols, rows))
-
-        if not plan:
-            return
-
-        blank_text = ""
-        blank_format = [getattr(self.formatter, "color_default", 1)]
-        blank_map = (None, None, None, None, None, None, None)
-        # Process in REVERSE line-index order so earlier insertions
-        # don't invalidate later indices.
-        for entry in sorted(plan, key=lambda e: -e[0]):
-            line_idx, _url, _cols, rows = entry
-            n_extra = max(0, rows - 1)
-            for _ in range(n_extra):
-                self.chat.insert(line_idx, blank_text)
-                self.chat_format.insert(line_idx, blank_format)
-                self.chat_map.insert(line_idx, blank_map)
-
-
-    def _build_image_lines(self):
-        """Return a list parallel to chat_buffer; each entry is None or
-        (col, url, cols, rows) for a line we want to overlay with an
-        image attachment thumbnail. Dimensions come from the per-image
-        geometry computed by _reserve_image_rows.
-
-        Detection is best-effort: for each message with image embeds,
-        the formatter renders a line like "[image attachment]: <url>".
-        We find those lines and pair them positionally with the
-        message's image embeds (carrying the FULL un-trimmed URL).
-        """
-        if not self.chat_map:
-            return []
-        out = [None] * len(self.chat_map)
-        msg_lines = {}
-        for i, line in enumerate(self.chat_map):
-            if not line or line[0] is None:
-                continue
-            if not (0 <= i < len(self.chat)):
-                continue
-            if "[image" not in self.chat[i]:
-                continue
-            msg_lines.setdefault(line[0], []).append(i)
-        for msg_num, line_indices in msg_lines.items():
-            if not (0 <= msg_num < len(self.messages)):
-                continue
-            msg = self.messages[msg_num]
-            urls = []
-            for embed in msg.get("embeds", []) or []:
-                url = embed.get("url")
-                if not url:
-                    continue
-                etype = (embed.get("type") or "").lower()
-                # Discord attachments carry MIME types like "image/png" or
-                # "image/gif"; embed objects might use a short form
-                # like "image". Match both.
-                if etype.startswith("image/") or etype in (
-                    "image", "png", "jpg", "jpeg", "gif", "webp"
-                ):
-                    urls.append(url)
-            for line_idx, url in zip(line_indices, urls):
-                if not (0 <= line_idx < len(self.chat)):
-                    continue
-                buf = self.chat[line_idx]
-                # Blank from "[image" through the end of the line so
-                # neither the label, the URL, nor the trim ellipsis
-                # ("...") trails the thumbnail.
-                img_pos = buf.find("[image")
-                if img_pos >= 0:
-                    self.chat[line_idx] = buf[:img_pos] + " " * (len(buf) - img_pos)
-                    # Strip any URL-underline / mention colours that
-                    # were on the original text, otherwise they show
-                    # as a faint line through the thumbnail.
-                    if 0 <= line_idx < len(self.chat_format):
-                        self.chat_format[line_idx] = [
-                            getattr(self.formatter, "color_default", 1),
-                        ]
-                    col = img_pos
-                else:
-                    line_map = self.chat_map[line_idx]
-                    url_ranges = (
-                        line_map[5][0] if (line_map[5] and len(line_map[5]) > 0) else []
-                    )
-                    col = url_ranges[0][0] if url_ranges else 0
-                geom = getattr(self, "_image_geom", {}).get((msg_num, url))
-                if not geom:
-                    continue
-                out[line_idx] = (col, url, geom[0], geom[1])
-        return out
-
-
-    def _build_emoji_lines(self):
-        """Return a list parallel to chat_buffer where each entry is a
-        list of (col, emoji_id) tuples for the custom emojis on that
-        line. Empty list for lines with no emojis.
-
-        chat_map[line] is a 7-tuple where index 5 is the per-line
-        `ranges` tuple. Inside ranges, index 2 is `emoji_ranges` —
-        a list of (start, end, emoji_id).
-        """
-        out = []
-        for line in self.chat_map:
-            if line and line[5] and len(line[5]) > 2 and line[5][2]:
-                emoji_ranges = line[5][2]
-                out.append([(r[0], r[2]) for r in emoji_ranges])
-            else:
-                out.append([])
-        return out
-
-
-    def _prefetch_avatars(self):
-        """Kick off a background thread that ensures every distinct
-        author in self.messages has their avatar downloaded and
-        transmitted to Kitty. The draw thread's _ensure_transmitted
-        path then short-circuits on the cache hit."""
-        if not self.pfp_renderer.enabled or not self.messages:
-            return
-        seen = set()
-        targets = []
-        for msg in self.messages:
-            uid = msg.get("user_id")
-            avatar = msg.get("avatar")
-            if not uid or not avatar:
-                continue
-            if avatar in seen:
-                continue
-            seen.add(avatar)
-            targets.append((uid, avatar))
-        if not targets:
-            return
-        def _warm():
-            for uid, avatar in targets:
-                try:
-                    self.pfp_renderer._ensure_transmitted(uid, avatar)
-                except Exception as e:
-                    logger.debug(f"prefetch avatar failed {uid}/{avatar}: {e}")
-        threading.Thread(target=_warm, daemon=True, name="pfp-prefetch").start()
-
-
-    def _build_pfp_lines(self):
-        """Return a list parallel to chat_buffer where each header line is
-        tagged with (user_id, avatar_id). Other lines are None.
-
-        chat_map[line] is a 7-tuple; index 0 = msg_num, index 4 = the
-        timestamp range (only set on header lines). We treat "has
-        timestamp range" as "is the avatar row".
-
-        To match Discord-style "message grouping", we only emit an
-        avatar on the *first* message of an author streak — i.e. when
-        the immediately-older message (self.messages[msg_num+1], since
-        the list is newest-first) is from a different user.
-        """
-        out = []
-        for line in self.chat_map:
-            if line and line[0] is not None and line[4]:
-                msg_num = line[0]
-                if 0 <= msg_num < len(self.messages):
-                    msg = self.messages[msg_num]
-                    older = (
-                        self.messages[msg_num + 1]
-                        if msg_num + 1 < len(self.messages)
-                        else None
-                    )
-                    if older and older.get("user_id") == msg.get("user_id"):
-                        out.append(None)
-                    else:
-                        out.append((msg.get("user_id"), msg.get("avatar")))
-                    continue
-            out.append(None)
-        return out
 
 
     def lines_to_msg(self, line_index, space=False):
@@ -7095,12 +6576,6 @@ class Endcord:
                     next_line_map = self.chat_map[line_index + 1]
                     if next_line_map and next_line_map[0] == line_map[0] and next_line_map[2]:
                         return line_index - in_msg_start_index - 1
-                return line_index - in_msg_start_index
-        # Fallback: streak-grouped messages have no header line (we strip
-        # it). Return the first line that has the matching msg_index so
-        # navigation (Shift+J/K, ctrl+u, etc.) still finds them.
-        for line_index, line_map in enumerate(self.chat_map):
-            if line_map and line_map[0] == msg_index:
                 return line_index - in_msg_start_index
         return 0
 
@@ -8629,9 +8104,7 @@ class Endcord:
                     new_message = self.execute_extensions_methods("on_message_event", new_message, cache=True)[0]
                     new_message_channel_id = new_message["d"]["channel_id"]
                     this_channel = (new_message_channel_id == self.active_channel["channel_id"])
-                    # Keep "avatar" on the message dict (use get instead of
-                    # pop) so the inline-PFP renderer can find it later.
-                    avatar_id = new_message["d"].get("avatar", None)
+                    avatar_id = new_message["d"].pop("avatar", None)
                     if this_channel and self.get_chat_last_message_id() == self.last_message_id:   # if its scrolled far up, this channel bot is cached
                         self.process_msg_events_active_channel(new_message)
                     # handle cached channels
@@ -8647,13 +8120,7 @@ class Endcord:
                             # still have to do this when scrolled far up, only to handle message delete/edit/react/poll
                             self.process_msg_events_active_channel(new_message, latest_chat=False)
                     # handle unseen and mentions
-                    # NB: is_window_open() is a stub that always returns True
-                    # outside pgcurses mode, so gate it on uses_pgcurses —
-                    # otherwise it short-circuits notification_in_active=False.
-                    # tui.terminal_focused is driven by CSI 1004 focus events;
-                    # when False, the user isn't looking at endcord and should
-                    # still get a notification even for the active channel.
-                    if not this_channel or (this_channel and (not self.tui.terminal_focused or self.new_unreads or self.ping_this_channel or self.tui.disable_drawing or (uses_pgcurses and self.tui.is_window_open()))):
+                    if not this_channel or (this_channel and (self.new_unreads or self.ping_this_channel or self.tui.disable_drawing or self.tui.is_window_open())):
                         self.process_msg_events_other_channels(new_message, avatar_id)
                     # remove ghost pings
                     self.process_msg_events_ghost_ping(new_message)
@@ -8673,15 +8140,10 @@ class Endcord:
                         new_typing["user_id"] != self.my_id
                     ):
                         if not new_typing["username"]:   # its DM
-                            # Match recipient by user_id so group DMs show
-                            # the actual typer instead of always recipients[0].
                             for dm in self.dms:
                                 if dm["id"] == new_typing["channel_id"]:
-                                    for recipient in dm["recipients"]:
-                                        if recipient["id"] == new_typing["user_id"]:
-                                            new_typing["username"] = recipient["username"]
-                                            new_typing["global_name"] = recipient["global_name"]
-                                            break
+                                    new_typing["username"] = dm["recipients"][0]["username"]
+                                    new_typing["global_name"] = dm["recipients"][0]["global_name"]
                                     break
                         for num, user in enumerate(self.typing):
                             if user["user_id"] == new_typing["user_id"]:
@@ -8982,7 +8444,7 @@ class Endcord:
                     self.get_forum_chunk()
 
             # check for message search chunks
-            if isinstance(self.search, tuple) and self.extra_indexes:
+            if self.search and self.extra_indexes:
                 extra_selected = self.tui.get_extra_selected()
                 if extra_selected >= len(self.extra_body) - 2 and not self.search_end:
                     self.extend_search()

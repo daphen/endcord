@@ -131,18 +131,16 @@ def merge_configs(custom_config_path, theme_path):
 
 
 def parse_color(data):
-    """Parse (r, g, b) tuples and '#123abc' hex strings into RGB tuples.
-    Plain ints pass through as ANSI codes. RGB tuples get resolved to
-    live curses palette slots later by tui.init_pair."""
+    """Automatically parse (r, g, b) and '#123abc' color formats and convert to 8-bit ansi"""
     if isinstance(data, list):
         for i, value in enumerate(data):
             data[i] = parse_color(value)
-    if isinstance(data, int):
+    if isinstance(data, int):   # already ansi
         return data
-    if isinstance(data, tuple) and len(data) == 3:
-        return data
-    if isinstance(data, str) and data.startswith("#"):
-        return color.hex_to_rgb(data)
+    if isinstance(data, tuple) and len(data) == 3:   # rgb tuple
+        return color.closest_color(data)[0]
+    if isinstance(data, str) and data.startswith("#"):   # hex string
+        return color.closest_color(color.hex_to_rgb(data))[0]
     return data
 
 

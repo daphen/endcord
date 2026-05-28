@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 
-from endcord import acs, peripherals, pfp as pfp_mod, utils
+from endcord import acs, peripherals, utils
 
 logger = logging.getLogger(__name__)
 uses_pgcurses = hasattr(curses, "PGCURSES")
@@ -205,19 +205,17 @@ class TUI():
         self.spellchecker = peripherals.SpellCheck(config["aspell_mode"], config["aspell_lang"])
         acs_map = acs.get_map()
         curses.use_default_colors()
-        # vim mode uses the real terminal cursor so DECSCUSR can shape it.
-        curses.curs_set(1 if config.get("vim_mode") else 0)
+        curses.curs_set(0)   # using custom cursor
         curses.mousemask(curses.ALL_MOUSE_EVENTS)
         curses.mouseinterval(0)
         sys.stdout.write("\033[?2004h")   # enable bracketed paste mode
-        sys.stdout.write("\033[?1004h")   # enable terminal focus reporting
         sys.stdout.flush()
         screen.clear()
         self.last_free_id = 1   # last free color pair id
         self.color_pairs = {}
         self.attrib_map = [0]   # has 0 so its index starts from 1 to be matched with color pairs
         tree_bg = config["color_tree_default"][1]
-        self.protected_colors = 22   # first N colors that must not be reused
+        self.protected_colors = 21   # first N colors that must not be reused
         self.init_pair((255, -1))   # white on default
         self.init_pair((233, 255))   # black on white
         self.init_pair(config["color_tree_default"])   # 3
@@ -239,8 +237,6 @@ class TUI():
         self.init_pair((208, tree_bg))   # orange
         self.init_pair((196, tree_bg))   # red
         self.init_pair(config["color_extra_window"])   # 21
-        self.init_pair(config["color_input_border_insert"])   # 22
-        self.input_border_insert_pair = 22
         curses.init_pair(255, config["color_default"][0], config["color_default"][1])   # temporary
         self.default_color = 255
         self.role_color_start_id = self.last_free_id   # starting id for role colors
@@ -313,24 +309,9 @@ class TUI():
         self.chat_buffer = []
         self.chat_format = []
         self.wide_map = []
-        # Inline-PFP state. Wired up later via set_pfp_renderer().
-        # pfp_lines: parallel to chat_buffer. None for non-header lines,
-        # (user_id, avatar_id) for lines where we want to draw an avatar.
-        # emoji_lines: parallel to chat_buffer. List of (col, emoji_id)
-        #   tuples per line, or [] when the line has no custom emojis.
-        # _pfp_dirty: set by draw_chat, cleared by screen_update after it
-        # has re-placed the avatars (which must happen AFTER doupdate).
-        self.pfp_renderer = None
-        self.pfp_lines = []
-        self.emoji_lines = []
-        # image_lines: parallel to chat_buffer. None or (col, url) for
-        # lines that carry an image-attachment URL we want to preview.
-        self.image_lines = []
-        self._pfp_dirty = False
         self.tree = []
         self.tree_format = []
         self.tree_clean_len = 0
-        self.mention_count = 0
         self.chat_selected = -1   # hidden selection by default
         self.tree_selected = -1
         self.dont_hide_chat_selection = False
@@ -345,11 +326,6 @@ class TUI():
         self.cursor_on = True
         self.enable_autocomplete = False
         self.bracket_paste = False
-        # Terminal focus state, fed by parsing CSI focus-in/-out sequences
-        # (ESC [ I / ESC [ O, requires `\e[?1004h` enabled above).
-        # Default True so we don't suppress before the first focus event
-        # lands; the terminal sends the right state on the next change.
-        self.terminal_focused = True
         self.spelling_range = [0, 0]
         self.misspelled = []
         self.delta_store = []
@@ -525,30 +501,7 @@ class TUI():
             # here must be delay, otherwise output gets messed up
             with self.lock:
                 time.sleep(self.screen_update_delay)
-                shape_byte = None
-                if self.vim_mode and hasattr(self, "input_hw") and self.win_input_line is not None:
-                    self.draw_input_border()
-                    try:
-                        self.screen.noutrefresh()
-                        # setsyx forces the doupdate cursor regardless of
-                        # which window's wnoutrefresh ran last.
-                        in_y, in_x = self.win_input_line.getbegyx()
-                        curses.setsyx(in_y, in_x + min(self.cursor_pos, self.input_hw[1] - 1))
-                    except curses.error:
-                        pass
-                    shape_byte = b"\033[6 q" if self.insert_mode else b"\033[2 q"
                 curses.doupdate()
-                # Place inline avatars AFTER doupdate so any terminal-level
-                # screen clears curses just issued (clearok / \e[2J) don't
-                # wipe the Kitty images.
-                if self._pfp_dirty:
-                    self.place_inline_pfps()
-                    self._pfp_dirty = False
-                if shape_byte is not None:
-                    try:
-                        os.write(1, shape_byte)
-                    except OSError:
-                        pass
                 self.need_update.clear()
 
 
@@ -622,79 +575,60 @@ class TUI():
             return
 
         h, w = self.screen.getmaxyx()
-        # outer_offset = where the input box's `│` lives (at outer_offset-1).
-        # inner_offset = where status/title/prompt start (= outer_offset-1).
-        tree_hidden = self.tree_width <= 0
-        outer_offset = 2 if tree_hidden else (self.tree_width + 3)
-        inner_offset = 1 if tree_hidden else (self.tree_width + 2)
-        chat_offset = outer_offset
-        # Force at least 1-col prompt padding so the cursor lands AFTER
-        # the input-border `│` (otherwise empty prompt puts cursor on the border).
-        prompt_pad = max(len(self.prompt), 1)
         chat_hwyx = (
             h - 4 - self.have_title,
-            w - chat_offset - 1 - bool(self.member_list),
+            w - (self.tree_width + 4) - bool(self.member_list),
             self.have_title,
-            chat_offset,
+            self.tree_width + 3,
         )
-        win_prompt_input_line = (1, w - outer_offset - 1, h - 2, outer_offset)
-        tree_hwyx = (h - self.have_title_tree - 1, max(self.tree_width, 1), self.have_title, 1)
+        win_prompt_input_line = (1, w - self.tree_width - 4, h - 2, self.tree_width + 3)
+        tree_hwyx = (h - self.have_title_tree - 1, self.tree_width, self.have_title, 1)
 
         # re-init areas
         if not redraw_only:
-            prompt_hwyx = (1, prompt_pad, h - 2, inner_offset)
+            prompt_hwyx = (1, len(self.prompt), h - 2, self.tree_width + 2)
             input_line_hwyx = (
                 1,
-                w - inner_offset - prompt_pad - 1,
+                w - (self.tree_width + 1) - len(self.prompt) - 2,
                 h - 2,
-                inner_offset + prompt_pad,
+                self.tree_width + len(self.prompt) + 2,
             )
-            status_line_hwyx = (1, w - inner_offset, h - 3, inner_offset)
+            status_line_hwyx = (1, w - (self.tree_width + 2), h - 3, self.tree_width + 2)
             self.win_chat = self.screen.derwin(*chat_hwyx)
             self.win_prompt = self.screen.derwin(*prompt_hwyx)
             self.win_input_line = self.screen.derwin(*input_line_hwyx)
             self.win_status_line = self.screen.derwin(*status_line_hwyx)
-            if not tree_hidden:
-                self.win_tree = self.screen.derwin(*tree_hwyx)
-            else:
-                self.win_tree = None
+            self.win_tree = self.screen.derwin(*tree_hwyx)
             if self.have_title:
-                title_line_hwyx = (1, w - inner_offset - bool(self.win_member_list) * (self.member_list_width + 1), 0, inner_offset)
+                title_line_hwyx = (1, w - (self.tree_width + 2) - bool(self.win_member_list) * (self.member_list_width + 1), 0, self.tree_width + 2)
                 self.win_title_line = self.screen.derwin(*title_line_hwyx)
                 self.title_hw = self.win_title_line.getmaxyx()
-            if self.have_title_tree and not tree_hidden:
+            if self.have_title_tree:
                 tree_title_line_hwyx = (1, self.tree_width + 2, 0, 0)
                 self.win_title_tree = self.screen.derwin(*tree_title_line_hwyx)
                 self.tree_title_hw = self.win_title_tree.getmaxyx()
-            elif tree_hidden:
-                self.win_title_tree = None
             self.screen_hw = self.screen.getmaxyx()
             self.chat_hw = self.win_chat.getmaxyx()
             self.prompt_hw = self.win_prompt.getmaxyx()
             self.input_hw = self.win_input_line.getmaxyx()
             self.status_hw = self.win_status_line.getmaxyx()
-            if self.win_tree is not None:
-                self.tree_hw = self.win_tree.getmaxyx()
-            else:
-                self.tree_hw = (0, 0)
+            self.tree_hw = self.win_tree.getmaxyx()
             self.win_extra_line = None
             self.win_extra_window = None
             self.win_member_list = None
 
         # redraw
-        self.input_border_hwyx = win_prompt_input_line
+        self.draw_border(win_prompt_input_line, top=False)
         self.draw_status_line()
-        self.draw_input_border()
         self.draw_border(chat_hwyx, top=not(self.have_title), right=not(self.draw_scrollbar))
         self.update_prompt(self.prompt)
         self.spellcheck()
         self.draw_input_line()
-        if not tree_hidden:
-            self.draw_border(tree_hwyx, top=not(self.have_title_tree) or self.tree_width < 10)
-            self.draw_tree()
+        self.draw_border(tree_hwyx, top=not(self.have_title_tree) or self.tree_width < 10)
+        self.draw_tree()
         if self.have_title:
             self.draw_title_line()
-        if self.have_title_tree and not tree_hidden:
+        if self.have_title_tree:
             self.draw_title_tree()
         self.draw_extra_line(self.extra_line_text)
         self.draw_extra_window(self.extra_window_title, self.extra_window_body, select=self.extra_select, reset_scroll=False)
@@ -714,11 +648,6 @@ class TUI():
         """Forcibly redraw entire screen"""
         self.screen.clear()
         self.screen.redrawwin()
-        # Some terminals drop Kitty image storage on a full screen clear,
-        # so the next placement needs to re-transmit. Same trick we use
-        # for tree-toggle.
-        if self.pfp_renderer is not None:
-            self.pfp_renderer.invalidate_transmissions()
         if sys.platform == "win32":
             self.screen.noutrefresh()   # ??? needed only with windows-curses
             self.need_update.set()
@@ -735,14 +664,11 @@ class TUI():
             common_h = h - 3 - self.have_title - 2*self.bordered
         else:
             common_h = h - 2 - self.have_title - 2*self.bordered
-        tree_hidden = self.tree_width <= 0
-        chat_left = 2 if tree_hidden else (self.tree_width + 2 * self.bordered + 1)
-        chat_w = w - chat_left - self.bordered - bool(self.member_list) * (self.member_list_width + 1)
         chat_hwyx = (
             common_h,
-            chat_w,
+            w - (self.tree_width + 3 * self.bordered + 1) - bool(self.member_list) * (self.member_list_width + 1),
             self.have_title,
-            chat_left,
+            self.tree_width + 2 * self.bordered + 1,
         )
         self.win_chat = self.screen.derwin(*chat_hwyx)
         self.chat_hw = self.win_chat.getmaxyx()
@@ -773,9 +699,7 @@ class TUI():
         """Resume curses and enable drawing, capturing terminal"""
         with self.lock:
             curses.reset_prog_mode()
-            # vim mode uses the real terminal cursor (DECSCUSR shape) so
-            # restore curs_set(1) here too — mirrors __init__.
-            curses.curs_set(1 if self.vim_mode else 0)
+            curses.curs_set(0)
             curses.flushinp()
             self.screen.refresh()
             self.disable_drawing = False
@@ -792,10 +716,9 @@ class TUI():
     def get_dimensions(self):
         """Return current dimensions for screen objects"""
         status_line = self.win_status_line.getmaxyx()
-        tree_dim = tuple(self.win_tree.getmaxyx()) if self.win_tree is not None else (0, 0)
         return (
             tuple(self.win_chat.getmaxyx()),
-            tree_dim,
+            tuple(self.win_tree.getmaxyx()),
             (status_line[0], status_line[1] - 2*self.bordered),
         )
 
@@ -879,13 +802,6 @@ class TUI():
                         # skip trigger if no space before it
                         if self.instant_assist:
                             return self.input_buffer, 5
-                        return None, None
-                    # Skip if char right after the trigger isn't alnum/underscore:
-                    # avoids opening the picker for ASCII smileys like :), :(,
-                    # :/, :|, :*, ;), etc. Real channel/user/emoji/sticker names
-                    # always start with an alphanumeric char.
-                    first = self.input_buffer[self.assist_start]
-                    if not (first.isalnum() or first == "_"):
                         return None, None
                     assist_word = self.input_buffer[self.assist_start : self.input_index]
                     return assist_word, assist_type
@@ -999,21 +915,12 @@ class TUI():
     def set_tree_width(self, value):
         """Chang tree width, does not redraw, if value is negative it will toggle state"""
         if value < 0:
-            if self.tree_width == 0:
+            if self.tree_width == 1:
                 self.tree_width = self.tree_width_conf
             else:
-                self.tree_width = 0
+                self.tree_width = 1
         else:
             self.tree_width = value
-        # Clear the screen so stale tree-content cells (the `─` drop-down
-        # glyphs etc. that were drawn before the toggle) don't bleed into
-        # the chat when toggling off. Without this, the underlying cells
-        # are never overwritten because the chat window starts further right.
-        self.screen.clear()
-        # Some terminals drop Kitty image storage when the screen clears,
-        # so tell the renderer to re-transmit on next placement.
-        if self.pfp_renderer is not None:
-            self.pfp_renderer.invalidate_transmissions()
         self.resize()
 
 
@@ -1172,11 +1079,6 @@ class TUI():
         """Select specific item in tree by its index"""
         if tree_pos is None:
             return
-        # The tree's curses refresh can shift Kitty image cells in some
-        # terminals (we've seen the inline avatars/attachments slide
-        # vertically on tree nav). Mark placements dirty so the next
-        # screen_update re-anchors them in the chat region.
-        self._pfp_dirty = True
         skipped = 0
         drop_down_skip_folder = False
         drop_down_skip_guild = False
@@ -1232,7 +1134,7 @@ class TUI():
             self.tree_format_changed = True
 
 
-    def draw_border(self, hwyx, top=True, bot=True, left=True, right=True, color_pair=None):
+    def draw_border(self, hwyx, top=True, bot=True, left=True, right=True):
         """Draw border around area on the screen with custom corners"""
         h, w, y, x = hwyx
         h += 2
@@ -1240,54 +1142,29 @@ class TUI():
         y -= 1
         x -= 1
 
-        pair = color_pair if color_pair is not None else self.default_color
         try:
             # lines
             if top and w > 0:
-                self.screen.hline(y, x + 1, curses.ACS_HLINE, w - 2, curses.color_pair(pair))
+                self.screen.hline(y, x + 1, curses.ACS_HLINE, w - 2, curses.color_pair(self.default_color))
             if bot and w > 0:
-                self.screen.hline(y + h - 1, x + 1, curses.ACS_HLINE, w - 2, curses.color_pair(pair))
+                self.screen.hline(y + h - 1, x + 1, curses.ACS_HLINE, w - 2, curses.color_pair(self.default_color))
             if left and h > 0:
-                self.screen.vline(y + 1, x, curses.ACS_VLINE, h - 2, curses.color_pair(pair))
+                self.screen.vline(y + 1, x, curses.ACS_VLINE, h - 2, curses.color_pair(self.default_color))
             if right and h > 0:
-                self.screen.vline(y + 1, x + w - 1, curses.ACS_VLINE, h - 2, curses.color_pair(pair))
+                self.screen.vline(y + 1, x + w - 1, curses.ACS_VLINE, h - 2, curses.color_pair(self.default_color))
 
             # corners
             if top and left:
-                self.screen.addstr(y, x, self.corner_ul, curses.color_pair(pair))
+                self.screen.addstr(y, x, self.corner_ul, curses.color_pair(self.default_color))
             if bot and left:
-                self.screen.addstr(y + h - 1, x, self.corner_dl, curses.color_pair(pair))
+                self.screen.addstr(y + h - 1, x, self.corner_dl, curses.color_pair(self.default_color))
             if top and right:
-                self.screen.addstr(y, x + w - 1, self.corner_ur, curses.color_pair(pair))
+                self.screen.addstr(y, x + w - 1, self.corner_ur, curses.color_pair(self.default_color))
             if bot and right:
                 # it errors when drawing in bottom-right cell, but still draws it
-                self.screen.addstr(y + h - 1, x + w - 1, self.corner_dr, curses.color_pair(pair))
+                self.screen.addstr(y + h - 1, x + w - 1, self.corner_dr, curses.color_pair(self.default_color))
         except curses.error:   # errors randomly when resizing
             pass
-
-
-    def draw_input_border(self):
-        """Color the input border based on vim mode."""
-        if not hasattr(self, "input_border_hwyx"):
-            return
-        is_insert = self.vim_mode and self.insert_mode
-        color = self.input_border_insert_pair if is_insert else None
-        self.draw_border(self.input_border_hwyx, top=False, color_pair=color)
-
-        if is_insert and self.win_status_line is not None and getattr(self, "last_status_line", None):
-            box_glyphs = set("─│╭╮╰╯├┤┬┴┼━┃┏┓┗┛┣┫┳┻╋")
-            pair = curses.color_pair(self.input_border_insert_pair)
-            for col, ch in enumerate(self.last_status_line):
-                if ch in box_glyphs:
-                    try:
-                        self.win_status_line.addstr(0, col, ch, pair)
-                    except curses.error:
-                        # addstr at the rightmost cell raises after writing.
-                        pass
-            try:
-                self.win_status_line.noutrefresh()
-            except curses.error:
-                pass
 
 
 
@@ -1343,34 +1220,8 @@ class TUI():
                 self.win_status_line.insstr(0, 0, status_line + "\n", curses.color_pair(self.default_color))
             else:
                 self.win_status_line.insstr(0, 0, status_line + "\n", curses.color_pair(17) | self.attrib_map[17])
-            self.last_status_line = status_line
             self.win_status_line.noutrefresh()
             self.need_update.set()
-
-
-    def _mention_badge(self):
-        """Return a '(N)' string with the count of channels worth
-        notifying the user about. Empty when the tree is visible.
-
-        The count is computed in app.update_tree (where DM and guild
-        data is directly available) and pushed via set_mention_count.
-        Counting from tree_format is unreliable because DM codes and
-        guild-channel codes both share the 300-range — see set_mention_count.
-        """
-        if self.tree_width > 0:
-            return ""
-        if not self.mention_count:
-            return ""
-        return f"({self.mention_count})"
-
-
-    def set_mention_count(self, count):
-        """Set the notification count shown in the title bar when the
-        tree is hidden. Called by app.update_tree."""
-        if count != self.mention_count:
-            self.mention_count = count
-            if self.tree_width == 0 and not self.disable_drawing:
-                self.draw_title_line()
 
 
     def draw_title_line(self):
@@ -1381,11 +1232,8 @@ class TUI():
             if title_txt_r:
                 title_txt_r = title_txt_r[:w - 2*self.bordered]
             title_txt_l = self.title_txt_l
-            badge = self._mention_badge()
-            if badge:
-                title_txt_l = f"{badge} {title_txt_l}"
 
-            if 0 < self.tree_width < 10:   # merge title tree with left title
+            if self.tree_width < 10:   # merge title tree with left title
                 if self.bordered:
                     title_tree_txt = replace_spaces_dash(trim_with_dash(self.title_tree_txt[:self.tree_width_conf]))
                     title_tree_txt = title_tree_txt + "─" * (self.tree_width_conf - len(title_tree_txt) - 2) + "─"
@@ -1487,14 +1335,6 @@ class TUI():
         """Draw text input line"""
         with self.lock:
             w = self.input_hw[1]
-            # vim mode skips the inverted-cell cursor that would otherwise
-            # overwrite stale chars; clear the line ourselves.
-            if self.vim_mode:
-                try:
-                    self.win_input_line.move(0, 0)
-                    self.win_input_line.clrtoeol()
-                except curses.error:
-                    pass
             # show only part of line when longer than screen
             start = max(0, len(self.input_buffer) - w + 1 - self.input_line_index)
             end = start + w - 1
@@ -1518,8 +1358,7 @@ class TUI():
             for pos, character in enumerate(line_text):
                 # cursor in the string
                 if not cursor_drawn and self.cursor_pos == pos:
-                    cursor_color = 14 if self.vim_mode else 15
-                    safe_insch(self.win_input_line, 0, self.cursor_pos, character, curses.color_pair(cursor_color) | self.attrib_map[cursor_color])
+                    safe_insch(self.win_input_line, 0, self.cursor_pos, character, curses.color_pair(15) | self.attrib_map[15])
                     cursor_drawn = True
                 # selected part of string
                 elif self.input_select_start is not None and selected_start_screen <= pos < selected_end_screen:
@@ -1534,13 +1373,9 @@ class TUI():
                     else:
                         safe_insch(self.win_input_line, 0, pos, character, curses.color_pair(14) | self.attrib_map[14])
             self.win_input_line.insch(0, pos + 1, "\n", curses.color_pair(0))
-            if not cursor_drawn and self.cursor_pos >= len(line_text) and not self.vim_mode:
+            # cursor at the end of string
+            if not cursor_drawn and self.cursor_pos >= len(line_text):
                 self.show_cursor()
-            if self.vim_mode:
-                try:
-                    self.win_input_line.move(0, min(self.cursor_pos, self.input_hw[1] - 1))
-                except curses.error:
-                    pass
             self.win_input_line.noutrefresh()
             self.need_update.set()
 
@@ -1563,11 +1398,6 @@ class TUI():
                 self.win_chat.noutrefresh()
                 if not norefresh:
                     self.need_update.set()
-                # Flag the screen_update thread to (re)place avatars after
-                # the next doupdate — doing it before doupdate means a
-                # terminal clear (from screen.clear / clearok) wipes the
-                # Kitty images right after they've been placed.
-                self._pfp_dirty = True
             except curses.error:
                 # exception will happen when window is resized to smaller w dimensions
                 self.resize()
@@ -1618,143 +1448,6 @@ class TUI():
                 self.wide_map.append(num + 1)
 
 
-    def set_pfp_renderer(self, renderer):
-        """Install a PfpRenderer; called once during app startup."""
-        self.pfp_renderer = renderer
-
-
-    def set_pfp_lines(self, pfp_lines):
-        """Update the per-line PFP map (parallel to chat_buffer).
-
-        Each entry is None or a tuple (user_id, avatar_id) — when not None
-        the line is a message header that should get an avatar.
-        """
-        self.pfp_lines = pfp_lines
-
-
-    def set_emoji_lines(self, emoji_lines):
-        """Update the per-line custom-emoji placement map.
-
-        Each entry is a list of (col, emoji_id) tuples giving the in-line
-        column offset of each custom emoji on that line.
-        """
-        self.emoji_lines = emoji_lines
-
-
-    def set_image_lines(self, image_lines):
-        """Update the per-line attachment-image map (parallel to
-        chat_buffer). Each entry is None or (col, url)."""
-        self.image_lines = image_lines
-
-
-    def place_inline_pfps(self):
-        """Render avatars for currently visible header lines.
-
-        Called from screen_update after curses.doupdate. The CUP and
-        place commands move the terminal cursor; we save/restore it
-        around the batch so the input-line cursor isn't left parked in
-        the chat region (which made user keypresses appear to vanish).
-        """
-        if not self.pfp_renderer or not self.pfp_renderer.enabled:
-            return
-        if not self.pfp_lines or self.disable_drawing:
-            return
-        # DECSC save cursor (\e7), DECRC restore (\e8). Doing this here
-        # rather than per-placement keeps the wire output compact.
-        # Also hide the cursor (\e[?25l) across the CUP burst — vim mode
-        # uses the real terminal cursor, and without this the user sees
-        # it flickering through each placement target on every chat
-        # redraw (very noticeable after upstream added the scrollbar
-        # which triggers extra draw_chat calls per j/k step).
-        try:
-            os.write(sys.stdout.fileno(), b"\x1b7\x1b[?25l")
-        except OSError:
-            pass
-        self.pfp_renderer.clear_placements()
-        chat_y, chat_x = self.win_chat.getbegyx()
-        chat_h = self.chat_hw[0]
-        # draw_chat renders bottom-up: chat_buffer[chat_index] -> bottom row.
-        # So visible buffer line i is at screen row (chat_y + chat_h - 1 -
-        # (i - chat_index)). Skip the row of avatars that would overflow
-        # past the top.
-        for i in range(self.chat_index, min(self.chat_index + chat_h, len(self.pfp_lines))):
-            entry = self.pfp_lines[i]
-            if not entry:
-                continue
-            user_id, avatar_id = entry
-            if not avatar_id:
-                continue
-            row = chat_y + chat_h - 1 - (i - self.chat_index)
-            if row < chat_y:
-                continue
-            # Avatar is pfp_rows rows tall — skip if placing it here would
-            # extend past the chat region (would bleed below the bottom
-            # border of the chat box).
-            if row + self.pfp_renderer.pfp_rows > chat_y + chat_h:
-                continue
-            # Place flush with the chat's left border so the message text
-            # sits close to the gutter (no extra empty column between).
-            self.pfp_renderer.place(user_id, avatar_id, row, chat_x)
-        # Inline image attachments — per-image (cols, rows) come from
-        # app-side measurement so the thumbnail keeps its source aspect.
-        # We also scan beyond chat_index+chat_h so a tall image whose
-        # header has scrolled just above the viewport can still render
-        # its bottom slice (otherwise the reserved blank rows show as
-        # whitespace at the top of the chat).
-        if self.image_lines:
-            scan_end = min(self.chat_index + chat_h + pfp_mod.ATTACHMENT_MAX_ROWS, len(self.image_lines))
-            for i in range(self.chat_index, scan_end):
-                entry = self.image_lines[i]
-                if not entry:
-                    continue
-                col_off, url, image_cols, image_rows = entry
-                row_natural = chat_y + chat_h - 1 - (i - self.chat_index)
-                crop_top = 0
-                if row_natural < chat_y:
-                    # Image header is above the viewport. Anchor the
-                    # placement to chat_y and crop the corresponding
-                    # number of rows off the top of the image source.
-                    crop_top = chat_y - row_natural
-                    if crop_top >= image_rows:
-                        continue
-                    row = chat_y
-                else:
-                    row = row_natural
-                # Safety net: if scrolled such that the reserved blanks
-                # have been clipped at the bottom, shrink rows so the
-                # thumbnail still fits inside the chat region.
-                available_rows = chat_y + chat_h - row
-                if available_rows < 1:
-                    continue
-                rows_to_use = min(image_rows - crop_top, available_rows)
-                cols_to_use = max(1, image_cols * rows_to_use // image_rows)
-                abs_col = chat_x + col_off
-                if abs_col < chat_x or abs_col >= chat_x + self.chat_hw[1]:
-                    continue
-                self.pfp_renderer.place_attachment(
-                    url, row, abs_col,
-                    cols=cols_to_use, rows=rows_to_use,
-                    crop_top_cells=crop_top, full_rows=image_rows,
-                )
-        # Inline custom emoji — placed at their in-line column for each
-        # visible line.
-        if self.emoji_lines:
-            for i in range(self.chat_index, min(self.chat_index + chat_h, len(self.emoji_lines))):
-                row = chat_y + chat_h - 1 - (i - self.chat_index)
-                if row < chat_y:
-                    continue
-                for col_off, emoji_id in self.emoji_lines[i]:
-                    abs_col = chat_x + col_off
-                    if abs_col < chat_x or abs_col >= chat_x + self.chat_hw[1]:
-                        continue
-                    self.pfp_renderer.place_emoji(emoji_id, row, abs_col)
-        try:
-            # Show cursor again, then DECRC restore position+attrs.
-            os.write(sys.stdout.fileno(), b"\x1b[?25h\x1b8")
-        except OSError:
-            pass
-
-
     def clear_chat_wide(self, wait=True):
         """Clear specific chat lines that are containing emoji"""
         if self.disable_drawing or not self.wide_map:
@@ -1776,8 +1469,6 @@ class TUI():
 
     def draw_tree(self):
         """Draw channel tree"""
-        if self.win_tree is None:
-            return
         if self.tree_width < 10:
             self.draw_tree_mini()
             return
@@ -1906,7 +1597,7 @@ class TUI():
             text = f">>> {mentions} MENTIONS >>>".center(h)
             color = curses.color_pair(8)
         else:
-            text = " " * h
+            text = ">>> TREE >>>".center(h)
             color = curses.color_pair(3)
 
         try:
@@ -1924,17 +1615,14 @@ class TUI():
         with self.lock:
             h, w = self.screen.getmaxyx()
             del (self.win_prompt, self.win_input_line)
-            tree_hidden = self.tree_width <= 0
-            inner_off = 1 if tree_hidden else (self.tree_width + 2*self.bordered + 1)
-            prompt_pad = max(len(self.prompt), 1)
             input_line_hwyx = (
                 1,
-                w - inner_off - prompt_pad - 1,
+                w - (self.tree_width + self.bordered + 1) - len(self.prompt) - 2*self.bordered,
                 h - 1 - self.bordered,
-                inner_off + prompt_pad)
+                self.tree_width + len(self.prompt) + 2*self.bordered + 1)
             self.win_input_line = self.screen.derwin(*input_line_hwyx)
             self.input_hw = self.win_input_line.getmaxyx()
-            prompt_hwyx = (1, prompt_pad, h - 1 - self.bordered, inner_off)
+            prompt_hwyx = (1, len(self.prompt), h - 1 - self.bordered, self.tree_width + 2*self.bordered + 1)
             self.win_prompt = self.screen.derwin(*prompt_hwyx)
             self.win_prompt.insstr(0, 0, self.prompt, curses.color_pair(13) | self.attrib_map[13])
             self.win_prompt.noutrefresh()
@@ -1955,10 +1643,8 @@ class TUI():
             self.extra_line_text = text
             if text and not self.disable_drawing:
                 h, w = self.screen.getmaxyx()
-                tree_hidden = self.tree_width <= 0
-                el_off = 1 if tree_hidden else (self.tree_width + self.bordered + 1)
                 if not self.win_extra_line:
-                    extra_line_hwyx = (1, w - el_off, h - self.bordered - 3, el_off)
+                    extra_line_hwyx = (1, w - (self.tree_width + self.bordered + 1), h - self.bordered - 3, self.tree_width + self.bordered + 1)
                     self.win_extra_line = self.screen.derwin(*extra_line_hwyx)
                     del self.win_chat
                     self.init_chat()
@@ -1975,7 +1661,7 @@ class TUI():
                     self.draw_member_list(self.member_list, self.member_list_format, force=True)
                     if self.bordered:
                         self.draw_status_line()
-                w = w - el_off
+                w = w - (self.tree_width + self.bordered + 1)
                 if self.bordered:
                     text = "─" + trim_with_dash(text, dash=False)
                     line_text = self.corner_ul + text + "─" * (w - len(text) - 2) + self.corner_ur
@@ -2034,18 +1720,11 @@ class TUI():
                 if not self.win_extra_window:
                     del self.win_chat
                     self.win_extra_line = None
-                    tree_hidden = self.tree_width <= 0
-                    # When tree hidden, align with input box left border at
-                    # col 1: ew_inner=2 puts extra_window's `│` at col 1
-                    # (after draw_border's x-1). ew_outer=3 keeps the right
-                    # corner at col w-1.
-                    ew_inner = 2 if tree_hidden else (self.tree_width + 2*self.bordered + 1)
-                    ew_outer = 3 if tree_hidden else (self.tree_width + 3*self.bordered + 1)
                     extra_window_hwyx = (
                         self.extra_window_h + 1,
-                        w - ew_outer,
+                        w - (self.tree_width + 3*self.bordered + 1),
                         h - 3 - self.extra_window_h - self.bordered,
-                        ew_inner,
+                        self.tree_width + 2*self.bordered + 1,
                     )
                     self.win_extra_window = self.screen.derwin(*extra_window_hwyx)
                     self.init_chat()
@@ -2156,8 +1835,7 @@ class TUI():
                     if self.bordered:
                         self.draw_border(member_list_hwyx)
                         if self.have_title:
-                            tl_off = 1 if self.tree_width <= 0 else (self.tree_width + 2)
-                            title_line_hwyx = (1, w - tl_off - bool(self.win_member_list) * (self.member_list_width + 1), 0, tl_off)
+                            title_line_hwyx = (1, w - (self.tree_width + 2) - bool(self.win_member_list) * (self.member_list_width + 1), 0, self.tree_width + 2)
                             self.win_title_line = self.screen.derwin(*title_line_hwyx)
                             self.title_hw = self.win_title_line.getmaxyx()
                             self.draw_title_line()
@@ -2229,8 +1907,7 @@ class TUI():
                 h, w = self.screen.getmaxyx()
                 self.init_chat()
                 if self.bordered and self.have_title:
-                    tl_off = 1 if self.tree_width <= 0 else (self.tree_width + 2)
-                    title_line_hwyx = (1, w - tl_off - bool(self.win_member_list) * (self.member_list_width + 1), 0, tl_off)
+                    title_line_hwyx = (1, w - (self.tree_width + 2) - bool(self.win_member_list) * (self.member_list_width + 1), 0, self.tree_width + 2)
                     self.win_title_line = self.screen.derwin(*title_line_hwyx)
                     self.title_hw = self.win_title_line.getmaxyx()
                     self.draw_title_line()
@@ -2266,11 +1943,6 @@ class TUI():
         while self.run:
             while self.run and self.hibernate_cursor >= 10:
                 time.sleep(self.blink_cursor_on)
-            # vim mode uses the terminal's own cursor — its blink is handled
-            # by the terminal, so don't redraw the cell here.
-            if self.vim_mode:
-                time.sleep(self.blink_cursor_on)
-                continue
             if self.cursor_on:
                 color_id = 14
                 sleep_time = self.blink_cursor_on
@@ -2362,35 +2034,6 @@ class TUI():
             self.draw_prompt()
 
 
-    def _rgb_to_slot(self, rgb):
-        """Allocate (or reuse) a curses palette slot for an (r,g,b) triple.
-        Falls back to closest 8-bit ANSI if the terminal can't redefine
-        colors or we've exhausted our reserved slot range."""
-        if not hasattr(self, "_rgb_slot_cache"):
-            self._rgb_slot_cache = {}
-            self._next_rgb_slot = 232  # endcord's palette stops at 231
-            self._can_change_color = curses.can_change_color()
-        if rgb in self._rgb_slot_cache:
-            return self._rgb_slot_cache[rgb]
-        if not self._can_change_color or self._next_rgb_slot >= curses.COLORS:
-            from endcord import color as _color
-            ansi = _color.closest_color(rgb)[0]
-            self._rgb_slot_cache[rgb] = ansi
-            return ansi
-        slot = self._next_rgb_slot
-        r, g, b = rgb
-        try:
-            curses.init_color(slot, r * 1000 // 255, g * 1000 // 255, b * 1000 // 255)
-        except curses.error:
-            from endcord import color as _color
-            ansi = _color.closest_color(rgb)[0]
-            self._rgb_slot_cache[rgb] = ansi
-            return ansi
-        self._rgb_slot_cache[rgb] = slot
-        self._next_rgb_slot += 1
-        return slot
-
-
     def init_pair(self, color, force_id=-1):
         """Initialize color pair while keeping track of last unused id, and store its attribute in attr_map"""
         if len(color) == 2:
@@ -2407,11 +2050,6 @@ class TUI():
                 attribute = curses.A_ITALIC
             else:
                 attribute = 0
-
-        if isinstance(fg, tuple):
-            fg = self._rgb_to_slot(fg)
-        if isinstance(bg, tuple):
-            bg = self._rgb_to_slot(bg)
 
         if fg > curses.COLORS:
             fg = -1
@@ -2640,13 +2278,11 @@ class TUI():
                 if self.tree_index and self.tree_selected <= self.tree_index + 2:
                     self.tree_index -= 1
                 self.tree_selected -= 1
-                self._pfp_dirty = True
                 self.draw_tree()
             elif self.wrap_around:
                 tree_end_index = self.get_tree_index(0)
                 self.tree_selected = tree_end_index
                 self.tree_index = max(self.tree_selected - (self.tree_hw[0] - 1), 0)
-                self._pfp_dirty = True
                 self.draw_tree()
 
         elif key in self.keybindings["tree_down"]:
@@ -2655,12 +2291,10 @@ class TUI():
                 if top_line < self.tree_clean_len and self.tree_selected >= top_line - 3:
                     self.tree_index += 1
                 self.tree_selected += 1
-                self._pfp_dirty = True
                 self.draw_tree()
             elif self.wrap_around:
                 self.tree_selected = 0
                 self.tree_index = 0
-                self._pfp_dirty = True
                 self.draw_tree()
 
         elif key in self.keybindings["tree_select"]:
@@ -2848,12 +2482,6 @@ class TUI():
                     self.bracket_paste = False
                     self.spellcheck()
                     self.draw_input_line()
-                    continue
-                elif sequence == [27, 91, 73, -1]:   # ESC [ I — focus in
-                    self.terminal_focused = True
-                    continue
-                elif sequence == [27, 91, 79, -1]:   # ESC [ O — focus out
-                    self.terminal_focused = False
                     continue
                 elif sequence[-1] == -1 and sequence[-2] == 27:
                     # holding escape key
@@ -3266,24 +2894,6 @@ class TUI():
             elif key in self.keybindings["view_media"] and self.chat_selected != -1:
                 return self.return_input_code(17)
 
-            elif key in self.keybindings["chat_msg_up"]:
-                return self.return_input_code(50)
-
-            elif key in self.keybindings["chat_msg_down"]:
-                return self.return_input_code(51)
-
-            elif key in self.keybindings["jump_next_media"]:
-                return self.return_input_code(52)
-
-            elif key in self.keybindings["jump_prev_media"]:
-                return self.return_input_code(53)
-
-            elif key in self.keybindings["jump_last_channel"]:
-                return self.return_input_code(54)
-
-            elif key in self.keybindings["jump_latest_unread"]:
-                return self.return_input_code(55)
-
             elif key in self.keybindings["spoil"] and self.chat_selected != -1 and not forum:
                 return self.return_input_code(18)
 
@@ -3349,11 +2959,6 @@ class TUI():
 
             elif self.vim_mode and key in self.keybindings.get("insert_mode", ()):
                 self.insert_mode = True
-                # Reset chat selection to bottom on entering INSERT so
-                # subsequent commands like Ctrl+U (jump_prev_media) start
-                # from the newest message instead of a stale off-screen pick.
-                if self.chat_selected != -1:
-                    self.set_selected(-1)
                 return self.return_input_code(28)
 
             # terminal reserved keys: CTRL+ C, I, J, M, Q, S, Z
@@ -3362,9 +2967,6 @@ class TUI():
                 return self.return_input_code((50, self.command_bindings.get(key)))
 
             elif key == curses.KEY_RESIZE:
-                # Terminal resize may invalidate Kitty image storage.
-                if self.pfp_renderer is not None:
-                    self.pfp_renderer.invalidate_transmissions()
                 self.resize()
                 _, w = self.input_hw
 
@@ -3407,8 +3009,6 @@ class TUI():
 
     def mouse_in_window(self, x, y, window, around=False):
         """Check if mouse is inside specified window"""
-        if window is None:
-            return False
         win_y, win_x = window.getbegyx()
         win_h, win_w = window.getmaxyx()
         if around:
