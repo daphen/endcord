@@ -1914,43 +1914,50 @@ class Endcord:
             # the max(last_message_id) among candidates.
             elif action == 55:
                 self.restore_input_text = (input_text, "standard")
-                best_id = None
-                best_msg_id = -1
-                dm_ids = {dm["id"] for dm in self.dms}
-                for cid, ch in self.read_state.items():
-                    if not ch or not formatter.is_unseen(ch):
-                        continue
-                    is_dm = cid in dm_ids
-                    if not is_dm and not ch.get("mentions"):
-                        continue
-                    try:
-                        lmid = int(ch["last_message_id"])
-                    except (TypeError, ValueError, KeyError):
-                        continue
-                    if lmid > best_msg_id:
-                        best_msg_id = lmid
-                        best_id = cid
-                if best_id is None:
-                    self.update_extra_line("No unread channels.", timed=True)
-                else:
-                    channel_id, channel_name, guild_id, guild_name, parent_hint = self.find_parents_from_id(best_id)
-                    if channel_id is None:
-                        self.update_extra_line("Unread channel unavailable.", timed=True)
+                try:
+                    best_id = None
+                    best_msg_id = -1
+                    dm_ids = {dm["id"] for dm in self.dms}
+                    for cid, ch in self.read_state.items():
+                        if not ch or not formatter.is_unseen(ch):
+                            continue
+                        is_dm = cid in dm_ids
+                        if not is_dm and not ch.get("mentions"):
+                            continue
+                        try:
+                            lmid = int(ch["last_message_id"])
+                        except (TypeError, ValueError, KeyError):
+                            continue
+                        if lmid > best_msg_id:
+                            best_msg_id = lmid
+                            best_id = cid
+                    if best_id is None:
+                        self.update_extra_line("No unread channels.", timed=True)
                     else:
-                        if guild_id is not None:
-                            self.open_guild(guild_id, select=True, open_only=True)
-                            category_tree_pos = self.tree_pos_from_id(parent_hint)
-                            if category_tree_pos:
-                                self.tui.toggle_category(category_tree_pos, only_open=True)
-                            channel_tree_pos = self.tree_pos_from_id(channel_id)
-                            if channel_tree_pos:
-                                self.tui.tree_select(channel_tree_pos)
+                        channel_id, channel_name, guild_id, guild_name, parent_hint = self.find_parents_from_id(best_id)
+                        if channel_id is None:
+                            self.update_extra_line("Unread channel unavailable.", timed=True)
                         else:
-                            self.open_guild(0, select=True, open_only=True)
-                            tree_pos = self.tree_pos_from_id(channel_id)
-                            if tree_pos is not None:
-                                self.tui.tree_select(tree_pos)
-                        self.switch_channel(channel_id, channel_name, guild_id, guild_name, parent_hint=parent_hint)
+                            if guild_id is not None:
+                                self.open_guild(guild_id, select=True, open_only=True)
+                                category_tree_pos = self.tree_pos_from_id(parent_hint)
+                                # Use `is not None` — tree_pos 0 is a valid
+                                # position (the DM section header) and would
+                                # be falsy under a plain truthiness check.
+                                if category_tree_pos is not None:
+                                    self.tui.toggle_category(category_tree_pos, only_open=True)
+                                channel_tree_pos = self.tree_pos_from_id(channel_id)
+                                if channel_tree_pos is not None:
+                                    self.tui.tree_select(channel_tree_pos)
+                            else:
+                                self.open_guild(0, select=True, open_only=True)
+                                tree_pos = self.tree_pos_from_id(channel_id)
+                                if tree_pos is not None:
+                                    self.tui.tree_select(tree_pos)
+                            self.switch_channel(channel_id, channel_name, guild_id, guild_name, parent_hint=parent_hint)
+                except Exception as e:
+                    logger.exception("jump_latest_unread crashed: %s", e)
+                    self.update_extra_line(f"Jump-to-unread failed: {e}", timed=True)
 
             # download file
             elif action == 9:
