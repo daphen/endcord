@@ -6950,16 +6950,22 @@ class Endcord:
                 if not (0 <= line_idx < len(self.chat)):
                     continue
                 buf = self.chat[line_idx]
-                # Hide the "[image attachment]: <url>" text by setting
-                # the line's format to default (no URL underline, no
-                # mention colour). DO NOT blank the text content — the
-                # "[image" marker has to stay in chat[] so subsequent
-                # passes can find this line again. The formatter does
-                # incremental updates and never re-emits old image
-                # markers, so blanking them would lose the only signal
-                # we have for re-placing the image on the next render.
+                # Blank from RIGHT AFTER the "[image" prefix to end of
+                # line so the URL/ellipsis past the thumbnail edge
+                # isn't visible. Keep the "[image" prefix itself as a
+                # 6-char marker so subsequent incremental passes can
+                # still find this line (formatter only re-emits the
+                # marker for *new* messages, blanking it entirely would
+                # lose the only signal we have for re-placing old
+                # images). Image thumbnails are always wider than 6
+                # cells so the marker hides under the overlay.
                 img_pos = buf.find("[image")
                 if img_pos >= 0:
+                    keep_until = img_pos + len("[image")
+                    self.chat[line_idx] = (
+                        buf[:keep_until]
+                        + " " * (len(buf) - keep_until)
+                    )
                     if 0 <= line_idx < len(self.chat_format):
                         self.chat_format[line_idx] = [
                             getattr(self.formatter, "color_default", 1),
