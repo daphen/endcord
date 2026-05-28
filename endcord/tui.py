@@ -1699,15 +1699,16 @@ class TUI():
             return
         if not self.pfp_lines or self.disable_drawing:
             return
-        # DECSC save cursor (\e7), DECRC restore (\e8). Doing this here
-        # rather than per-placement keeps the wire output compact.
-        # Also hide the cursor (\e[?25l) across the CUP burst — vim mode
-        # uses the real terminal cursor, and without this the user sees
-        # it flickering through each placement target on every chat
-        # redraw (very noticeable after upstream added the scrollbar
-        # which triggers extra draw_chat calls per j/k step).
+        # Hide the cursor across the CUP burst. We used to also DECSC
+        # save (\e7) and rely on \e8 to restore the position at the
+        # end, but DECSC doesn't save cursor visibility, and some
+        # terminals briefly render the cursor at each CUP target
+        # before honouring \e[?25l — visible as cursor flicker at the
+        # PFP placement positions on every chat redraw. Switching to
+        # an explicit CUP to the input cell at the end (see bottom of
+        # this method) sidesteps all of that.
         try:
-            os.write(sys.stdout.fileno(), b"\x1b7\x1b[?25l")
+            os.write(sys.stdout.fileno(), b"\x1b[?25l")
         except OSError:
             pass
         self.pfp_renderer.clear_placements()
@@ -1788,12 +1789,25 @@ class TUI():
                     if abs_col < chat_x or abs_col >= chat_x + self.chat_hw[1]:
                         continue
                     self.pfp_renderer.place_emoji(emoji_id, row, abs_col)
+        # Explicitly CUP the cursor back to the input cell, THEN show.
+        # The cursor was already at the input cell after doupdate, but
+        # our CUP burst moved it through chat positions; we need to
+        # land it back exactly where curses thinks it is so the next
+        # keypress doesn't surprise. The unhide command must come
+        # AFTER the CUP — otherwise the cursor briefly renders at the
+        # last placement target before the CUP takes effect.
         try:
-            # DECRC restore position+attrs FIRST (cursor still hidden),
-            # then re-show the cursor. Doing it in the other order
-            # flashes the cursor at the last CUP target in the chat
-            # region between the show and the restore.
-            os.write(sys.stdout.fileno(), b"\x1b8\x1b[?25h")
+            if (
+                getattr(self, "win_input_line", None) is not None
+                and hasattr(self, "input_hw")
+                and hasattr(self, "cursor_pos")
+            ):
+                in_y, in_x = self.win_input_line.getbegyx()
+                final_col = in_x + min(self.cursor_pos, self.input_hw[1] - 1)
+                cup = f"\x1b[{in_y + 1};{final_col + 1}H".encode("ascii")
+                os.write(sys.stdout.fileno(), cup + b"\x1b[?25h")
+            else:
+                os.write(sys.stdout.fileno(), b"\x1b[?25h")
         except OSError:
             pass
 
