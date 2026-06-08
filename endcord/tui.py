@@ -258,9 +258,6 @@ class TUI():
         self.vline = acs_map.get(vline, vline)
         self.tree_width = max(config["tree_width"], 10)
         self.tree_width_conf = self.tree_width
-        # Start with the tree hidden (toggle_tree from NORMAL mode
-        # restores it to tree_width_conf). config["tree_hidden_on_start"]
-        # opt-out for anyone who wants the tree visible from launch.
         if config.get("tree_hidden_on_start", True):
             self.tree_width = 0
         self.extra_window_h = config["extra_window_height"]   # load initial value
@@ -304,10 +301,7 @@ class TUI():
 
         # initial values
         self.disable_drawing = False
-        # Empty fallback so users with `format_prompt = ""` don't see a
-        # stale "> " before app.update_prompt() runs. Upstream default
-        # is "> ", but anyone configuring an empty prompt got the
-        # default flickering in for a tick.
+        # Empty fallback — avoids stale "> " flicker before app.update_prompt() runs.
         self.prompt = ""
         self.input_buffer = ""
         self.status_txt_l = ""
@@ -322,18 +316,9 @@ class TUI():
         self.chat_buffer = []
         self.chat_format = []
         self.wide_map = []
-        # Inline-PFP state. Wired up later via set_pfp_renderer().
-        # pfp_lines: parallel to chat_buffer. None for non-header lines,
-        # (user_id, avatar_id) for lines where we want to draw an avatar.
-        # emoji_lines: parallel to chat_buffer. List of (col, emoji_id)
-        #   tuples per line, or [] when the line has no custom emojis.
-        # _pfp_dirty: set by draw_chat, cleared by screen_update after it
-        # has re-placed the avatars (which must happen AFTER doupdate).
         self.pfp_renderer = None
         self.pfp_lines = []
         self.emoji_lines = []
-        # image_lines: parallel to chat_buffer. None or (col, url) for
-        # lines that carry an image-attachment URL we want to preview.
         self.image_lines = []
         self._pfp_dirty = False
         self.tree = []
@@ -354,10 +339,7 @@ class TUI():
         self.cursor_on = True
         self.enable_autocomplete = False
         self.bracket_paste = False
-        # Terminal focus state, fed by parsing CSI focus-in/-out sequences
-        # (ESC [ I / ESC [ O, requires `\e[?1004h` enabled above).
-        # Default True so we don't suppress before the first focus event
-        # lands; the terminal sends the right state on the next change.
+        # Updated by ESC [ I / ESC [ O focus events from `\e[?1004h`.
         self.terminal_focused = True
         self.spelling_range = [0, 0]
         self.misspelled = []
@@ -571,22 +553,18 @@ class TUI():
                         last_insert_mode = self.insert_mode
                     try:
                         self.screen.noutrefresh()
-                        # setsyx forces the doupdate cursor regardless of
-                        # which window's wnoutrefresh ran last.
+                        # setsyx forces doupdate cursor regardless of last wnoutrefresh.
                         in_y, in_x = self.win_input_line.getbegyx()
                         curses.setsyx(in_y, in_x + min(self.cursor_pos, self.input_hw[1] - 1))
                     except curses.error:
                         pass
                     shape_byte = b"\033[6 q" if self.insert_mode else b"\033[2 q"
                 curses.doupdate()
-                # Place inline avatars AFTER doupdate so any terminal-level
-                # screen clears curses just issued (clearok / \e[2J) don't
-                # wipe the Kitty images.
+                # Place inline avatars AFTER doupdate so curses screen clears don't wipe them.
                 if self._pfp_dirty:
                     self.place_inline_pfps()
                     self._pfp_dirty = False
-                # Only re-send DECSCUSR when the cursor shape actually
-                # changes. Every-tick spam re-paints the cursor.
+                # Only re-send DECSCUSR when shape changes — avoid per-tick repaint.
                 if shape_byte is not None and shape_byte != last_shape_byte:
                     try:
                         os.write(1, shape_byte)
@@ -668,14 +646,11 @@ class TUI():
             return
 
         h, w = self.screen.getmaxyx()
-        # outer_offset = where the input box's `│` lives (at outer_offset-1).
-        # inner_offset = where status/title/prompt start (= outer_offset-1).
         tree_hidden = self.tree_width <= 0
         outer_offset = 2 if tree_hidden else (self.tree_width + 3)
         inner_offset = 1 if tree_hidden else (self.tree_width + 2)
         chat_offset = outer_offset
-        # Force at least 1-col prompt padding so the cursor lands AFTER
-        # the input-border `│` (otherwise empty prompt puts cursor on the border).
+        # ≥1 col prompt pad so cursor lands after input border `│`, not on it.
         prompt_pad = max(len(self.prompt), 1)
         chat_hwyx = (
             h - 4 - self.have_title,
@@ -762,9 +737,6 @@ class TUI():
         """Forcibly redraw entire screen"""
         self.screen.clear()
         self.screen.redrawwin()
-        # Some terminals drop Kitty image storage on a full screen clear,
-        # so the next placement needs to re-transmit. Same trick we use
-        # for tree-toggle.
         if self.pfp_renderer is not None:
             self.pfp_renderer.invalidate_transmissions()
         if sys.platform == "win32":
@@ -822,9 +794,7 @@ class TUI():
         """Resume curses and enable drawing, capturing terminal"""
         with self.lock:
             curses.reset_prog_mode()
-            # vim mode uses the real terminal cursor (DECSCUSR shape) so
-            # restore curs_set(1) here too — mirrors __init__.
-            curses.curs_set(1 if self.vim_mode else 0)
+            curses.curs_set(1 if self.vim_mode else 0)   # vim mode needs real cursor for DECSCUSR
             curses.flushinp()
             self.screen.refresh()
             self.disable_drawing = False
@@ -929,10 +899,7 @@ class TUI():
                         if self.instant_assist:
                             return self.input_buffer, 5
                         return None, None
-                    # Skip if char right after the trigger isn't alnum/underscore:
-                    # avoids opening the picker for ASCII smileys like :), :(,
-                    # :/, :|, :*, ;), etc. Real channel/user/emoji/sticker names
-                    # always start with an alphanumeric char.
+                    # Skip if char after trigger isn't alnum/_ — avoids ASCII smileys :), :( etc.
                     first = self.input_buffer[self.assist_start]
                     if not (first.isalnum() or first == "_"):
                         return None, None
@@ -1054,13 +1021,9 @@ class TUI():
                 self.tree_width = 0
         else:
             self.tree_width = value
-        # Clear the screen so stale tree-content cells (the `─` drop-down
-        # glyphs etc. that were drawn before the toggle) don't bleed into
-        # the chat when toggling off. Without this, the underlying cells
-        # are never overwritten because the chat window starts further right.
+        # Clear so stale tree glyphs don't bleed when toggling off.
         self.screen.clear()
-        # Some terminals drop Kitty image storage when the screen clears,
-        # so tell the renderer to re-transmit on next placement.
+        # Some terminals drop Kitty image storage on clear — force re-transmit.
         if self.pfp_renderer is not None:
             self.pfp_renderer.invalidate_transmissions()
         self.resize()
@@ -1221,10 +1184,7 @@ class TUI():
         """Select specific item in tree by its index"""
         if tree_pos is None:
             return
-        # The tree's curses refresh can shift Kitty image cells in some
-        # terminals (we've seen the inline avatars/attachments slide
-        # vertically on tree nav). Mark placements dirty so the next
-        # screen_update re-anchors them in the chat region.
+        # Tree refresh can shift Kitty image cells — re-anchor on next update.
         self._pfp_dirty = True
         skipped = 0
         drop_down_skip_folder = False
@@ -1316,17 +1276,7 @@ class TUI():
 
 
     def draw_input_border(self):
-        """Color the input border based on vim mode.
-
-        In INSERT mode draw all four sides of the input box in the
-        insert colour AND overlay the `[--INSERT--]` label at its
-        position on the status row in default colour. The orange
-        rectangle is the primary mode indicator; the label punches
-        through it like a tab.
-
-        In NORMAL mode draw bottom + sides in default colour and
-        leave the top row to the status line.
-        """
+        """Color input border by vim mode. INSERT = all 4 sides orange + status text punches through."""
         if not hasattr(self, "input_border_hwyx"):
             return
         is_insert = self.vim_mode and self.insert_mode
@@ -1335,11 +1285,7 @@ class TUI():
                 self.input_border_hwyx, top=True,
                 color_pair=self.input_border_insert_pair,
             )
-            # Re-overlay every non-box-drawing character from the
-            # status line in default colour so things like
-            # "Replying to <user>", "[--INSERT--]", typing indicator,
-            # etc. punch through the orange border like tabs. We
-            # keep the orange `─` only where the status had filler.
+            # Overlay non-box-drawing status chars in default color (punch through).
             if (
                 hasattr(self, "last_status_line")
                 and self.last_status_line
@@ -1356,15 +1302,12 @@ class TUI():
                                 curses.color_pair(self.default_color),
                             )
                         except curses.error:
-                            # addstr at the rightmost cell of a window
-                            # raises after writing — ignore.
                             pass
                     self.win_status_line.noutrefresh()
                 except curses.error:
                     pass
         else:
             self.draw_border(self.input_border_hwyx, top=False, color_pair=None)
-            # Repaint status content that the orange overwrote.
             try:
                 self.draw_status_line()
             except (curses.error, AttributeError):
@@ -1427,23 +1370,12 @@ class TUI():
             self.last_status_line = status_line
             self.win_status_line.noutrefresh()
             self.need_update.set()
-        # In INSERT mode the status row got overwritten by orange `─`
-        # last time draw_input_border ran. Repaint orange + label so
-        # typing indicators / channel switches don't flicker the
-        # row back to default for a tick.
         if self.vim_mode and self.insert_mode:
-            self.draw_input_border()
+            self.draw_input_border()   # repaint orange border + label after status redraw
 
 
     def _mention_badge(self):
-        """Return a '(N)' string with the count of channels worth
-        notifying the user about. Empty when the tree is visible.
-
-        The count is computed in app.update_tree (where DM and guild
-        data is directly available) and pushed via set_mention_count.
-        Counting from tree_format is unreliable because DM codes and
-        guild-channel codes both share the 300-range — see set_mention_count.
-        """
+        """Return '(N)' count of mention-worthy channels. Empty when tree visible."""
         if self.tree_width > 0:
             return ""
         if not self.mention_count:
@@ -1650,18 +1582,10 @@ class TUI():
                 self.win_chat.noutrefresh()
                 if not norefresh:
                     self.need_update.set()
-                # Flag the screen_update thread to (re)place avatars after
-                # the next doupdate — doing it before doupdate means a
-                # terminal clear (from screen.clear / clearok) wipes the
-                # Kitty images right after they've been placed.
+                # Place avatars in screen_update after doupdate so
+                # terminal-level clears don't wipe Kitty images.
                 self._pfp_dirty = True
-                # Re-paint the right vline of the chat region. Wide
-                # characters (emoji) at the rightmost chat column
-                # extend their second cell into the border column;
-                # this rewrites the `│` on top so the border stays
-                # intact regardless of what the cython draw_chat
-                # spilled into the boundary. Only matters in bordered
-                # mode where the right border is at chat_x + chat_w.
+                # Repaint right vline to cover wide-char overflow.
                 if self.bordered:
                     try:
                         chat_y, chat_x = self.win_chat.getbegyx()
@@ -1768,13 +1692,8 @@ class TUI():
             return
         if not self.pfp_lines or self.disable_drawing:
             return
-        # Wrap the entire CUP+place burst in Synchronized Output
-        # (DECSET 2026). The terminal accumulates all writes between
-        # BSU (\e[?2026h) and ESU (\e[?2026l) and presents them as a
-        # single atomic frame — so the cursor never visibly travels
-        # through the CUP placement targets, and \e[?25l is honoured
-        # before any cursor movement renders. Both Kitty and Ghostty
-        # support DECSET 2026; falls back to ignored-no-op elsewhere.
+        # DECSET 2026 (atomic frame) + hide cursor. Kitty + Ghostty
+        # honour both; cursor stays put through the CUP burst.
         try:
             os.write(sys.stdout.fileno(), b"\x1b[?2026h\x1b[?25l")
         except OSError:
@@ -1783,9 +1702,6 @@ class TUI():
         chat_y, chat_x = self.win_chat.getbegyx()
         chat_h = self.chat_hw[0]
         # draw_chat renders bottom-up: chat_buffer[chat_index] -> bottom row.
-        # So visible buffer line i is at screen row (chat_y + chat_h - 1 -
-        # (i - chat_index)). Skip the row of avatars that would overflow
-        # past the top.
         for i in range(self.chat_index, min(self.chat_index + chat_h, len(self.pfp_lines))):
             entry = self.pfp_lines[i]
             if not entry:
@@ -1796,20 +1712,11 @@ class TUI():
             row = chat_y + chat_h - 1 - (i - self.chat_index)
             if row < chat_y:
                 continue
-            # Avatar is pfp_rows rows tall — skip if placing it here would
-            # extend past the chat region (would bleed below the bottom
-            # border of the chat box).
             if row + self.pfp_renderer.pfp_rows > chat_y + chat_h:
-                continue
-            # Place flush with the chat's left border so the message text
-            # sits close to the gutter (no extra empty column between).
+                continue   # skip if avatar would bleed past chat bottom
             self.pfp_renderer.place(user_id, avatar_id, row, chat_x)
-        # Inline image attachments — per-image (cols, rows) come from
-        # app-side measurement so the thumbnail keeps its source aspect.
-        # We also scan beyond chat_index+chat_h so a tall image whose
-        # header has scrolled just above the viewport can still render
-        # its bottom slice (otherwise the reserved blank rows show as
-        # whitespace at the top of the chat).
+        # Inline image attachments. Scan past chat_h so partially-above
+        # images can still render their bottom slice.
         if self.image_lines:
             scan_end = min(self.chat_index + chat_h + pfp_mod.ATTACHMENT_MAX_ROWS, len(self.image_lines))
             for i in range(self.chat_index, scan_end):
@@ -1820,18 +1727,13 @@ class TUI():
                 row_natural = chat_y + chat_h - 1 - (i - self.chat_index)
                 crop_top = 0
                 if row_natural < chat_y:
-                    # Image header is above the viewport. Anchor the
-                    # placement to chat_y and crop the corresponding
-                    # number of rows off the top of the image source.
+                    # Header off-screen above; anchor at chat_y and crop.
                     crop_top = chat_y - row_natural
                     if crop_top >= image_rows:
                         continue
                     row = chat_y
                 else:
                     row = row_natural
-                # Safety net: if scrolled such that the reserved blanks
-                # have been clipped at the bottom, shrink rows so the
-                # thumbnail still fits inside the chat region.
                 available_rows = chat_y + chat_h - row
                 if available_rows < 1:
                     continue
@@ -1845,8 +1747,6 @@ class TUI():
                     cols=cols_to_use, rows=rows_to_use,
                     crop_top_cells=crop_top, full_rows=image_rows,
                 )
-        # Inline custom emoji — placed at their in-line column for each
-        # visible line.
         if self.emoji_lines:
             for i in range(self.chat_index, min(self.chat_index + chat_h, len(self.emoji_lines))):
                 row = chat_y + chat_h - 1 - (i - self.chat_index)
@@ -1857,11 +1757,7 @@ class TUI():
                     if abs_col < chat_x or abs_col >= chat_x + self.chat_hw[1]:
                         continue
                     self.pfp_renderer.place_emoji(emoji_id, row, abs_col)
-        # Explicitly CUP the cursor back to the input cell, show it,
-        # then close Synchronized Output (\e[?2026l). The whole burst
-        # — hide, CUP placements, place commands, final CUP, show —
-        # commits as one atomic frame, so no intermediate position
-        # ever renders.
+        # CUP back to input, show cursor, close DECSET 2026.
         try:
             if (
                 getattr(self, "win_input_line", None) is not None
@@ -2159,10 +2055,7 @@ class TUI():
                     del self.win_chat
                     self.win_extra_line = None
                     tree_hidden = self.tree_width <= 0
-                    # When tree hidden, align with input box left border at
-                    # col 1: ew_inner=2 puts extra_window's `│` at col 1
-                    # (after draw_border's x-1). ew_outer=3 keeps the right
-                    # corner at col w-1.
+                    # tree-hidden: ew_inner=2 puts `│` at col 1 (matches input box).
                     ew_inner = 2 if tree_hidden else (self.tree_width + 2*self.bordered + 1)
                     ew_outer = 3 if tree_hidden else (self.tree_width + 3*self.bordered + 1)
                     extra_window_hwyx = (
@@ -2392,9 +2285,7 @@ class TUI():
         while self.run:
             while self.run and self.hibernate_cursor >= 10:
                 time.sleep(self.blink_cursor_on)
-            # vim mode uses the terminal's own cursor — its blink is handled
-            # by the terminal, so don't redraw the cell here.
-            if self.vim_mode:
+            if self.vim_mode:   # terminal handles blink for DECSCUSR cursor
                 time.sleep(self.blink_cursor_on)
                 continue
             if self.cursor_on:
@@ -2938,9 +2829,7 @@ class TUI():
                 continue
             w = self.input_hw[1]
 
-            # ncurses maps ESC[I / ESC[O focus events to integer codes
-            # 590 / 591 in keypad mode, not the raw byte sequence — so
-            # the [27, 91, 73/79, -1] match below never fires for them.
+            # ncurses maps ESC[I/O focus events to keypad codes 590/591.
             if key == 590:   # focus in
                 self.terminal_focused = True
                 continue
@@ -3279,35 +3168,20 @@ class TUI():
                 self.input_select_start = None
                 self.spellcheck()
 
-            # Ctrl+H / Ctrl+L → previous / next tab, in BOTH vim
-            # NORMAL and INSERT mode. These keycodes (8 and 12) are
-            # also the default vim-mode select_left/select_right
-            # bindings — we intercept them here so tab switching wins
-            # everywhere. Side effect: vim INSERT loses Ctrl+H/L for
-            # char-selection (use Shift+Left/Right instead).
+            # Vim-mode universal: Ctrl+H/L = prev/next tab, Ctrl+E = edit-last,
+            # Ctrl+N = jump-unread, Ctrl+G = scroll-bottom (in both NORMAL and INSERT).
             elif self.vim_mode and key == 8:
                 return self.return_input_code((50, "switch_tab prev"))
 
             elif self.vim_mode and key == 12:
                 return self.return_input_code((50, "switch_tab next"))
 
-            # Ctrl+E in vim mode (NORMAL or INSERT) → edit my last
-            # message in the active channel. Action 56 in app.py
-            # walks self.messages to find the latest by my_id and
-            # enters edit + INSERT mode.
             elif self.vim_mode and key == 5:
                 return self.return_input_code(56)
 
-            # Ctrl+N in vim mode (NORMAL or INSERT) → jump to the
-            # latest unread channel (action 55). Wins over the
-            # default insert_newline=14 binding.
             elif self.vim_mode and key == 14:
                 return self.return_input_code(55)
 
-            # Ctrl+G in vim mode (NORMAL or INSERT) → scroll chat to
-            # the bottom (action 7). Replaces the upstream Shift+B
-            # binding, which we clear in defaults so it doesn't also
-            # fire from `B`.
             elif self.vim_mode and key == 7:
                 return self.return_input_code(7)
 
@@ -3517,9 +3391,7 @@ class TUI():
 
             elif self.vim_mode and key in self.keybindings.get("insert_mode", ()):
                 self.insert_mode = True
-                # Reset chat selection to bottom on entering INSERT so
-                # subsequent commands like Ctrl+U (jump_prev_media) start
-                # from the newest message instead of a stale off-screen pick.
+                # Reset selection to bottom on INSERT — jump_prev_media etc. start from newest.
                 if self.chat_selected != -1:
                     self.set_selected(-1)
                 return self.return_input_code(28)

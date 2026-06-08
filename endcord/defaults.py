@@ -303,11 +303,7 @@ vim_mode_bindings = {
     "jump_next_media": 4,    # Ctrl+D
     "jump_prev_media": 21,   # Ctrl+U
     "jump_last_channel": 15,   # Ctrl+O
-    # `jump_latest_unread` is now intercepted directly in tui.py for
-    # Ctrl+N in both NORMAL and INSERT — see the explicit key==14
-    # dispatch alongside Ctrl+H/L/E. Leaving this slot empty so we
-    # don't double-fire on a key.
-    "jump_latest_unread": "",
+    "jump_latest_unread": "",   # intercepted as Ctrl+N in tui.py (NORMAL+INSERT)
     "tree_select": " ",
     "tree_collapse_threads": "W",
     "tree_join_thread": "O",
@@ -338,9 +334,7 @@ vim_mode_bindings = {
     "edit": "e",
     "delete": "d",
     "toggle_ping": "P",
-    # scroll_bottom is now Ctrl+G in vim mode — intercepted directly
-    # in tui.py. Cleared so Shift+B doesn't double-fire.
-    "scroll_bottom": "",
+    "scroll_bottom": "",   # intercepted as Ctrl+G in tui.py (vim mode)
     "go_replied": "g",
     "download": "D",
     "upload": 1,   # Ctrl+A (a for attach)

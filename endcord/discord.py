@@ -130,9 +130,7 @@ class Discord():
             self.host = DISCORD_HOST
             self.cdn_host = DISCORD_CDN_HOST
         logger.debug(f"Endpoints: API={self.host}, CDN={self.cdn_host}")
-        # Populated by send_message when a non-2xx is returned, so the
-        # message_sender thread can surface a visible error.
-        self.last_send_error = None
+        self.last_send_error = None   # populated by send_message on non-2xx for message_sender
         self.token = token
         self.header = {
             "Accept": "*/*",
@@ -814,9 +812,7 @@ class Discord():
                 "stickers": data.get("sticker_items", []),
             }
         log_api_error(data, status, "send_message")
-        # Stash a short human-readable description of the failure so the
-        # message_sender thread can surface it in the extra line — the
-        # caller currently only sees False.
+        # Stash error so message_sender thread can surface it in extra line.
         err_code = None
         try:
             err_code = json.loads(data).get("code") if data else None

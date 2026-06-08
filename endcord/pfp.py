@@ -29,54 +29,28 @@ try:
 except ImportError:
     HAVE_PIL = False
 
-# Width/height in terminal cells. 5×2 keeps the avatar square at the
-# typical Kitty cell ratio (~1:2.5). The chat-side pad is 6 = 5 avatar
-# cells + 1 col gap between the avatar and the message text.
+# Cell-size fallbacks — PfpRenderer overrides at runtime via detect_cell_aspect().
 PFP_COLS = 5
 PFP_ROWS = 2
-# Inline custom emoji size. Single-row so the image never bleeds into
-# the row below. 3 cols wide gives a slight horizontal stretch but
-# stays roughly emoji-sized (~text height).
 EMOJI_COLS = 3
 EMOJI_ROWS = 1
-# Inline image-attachment thumbnail. The actual display dimensions
-# (cols × rows) are computed per-image to preserve the source aspect
-# ratio. ATTACHMENT_MAX_COLS / ATTACHMENT_MAX_ROWS are upper bounds.
-# CELL_ASPECT = approximate cell height / cell width for typical Kitty
-# fonts; used to translate source pixel aspect into cell aspect.
 ATTACHMENT_MAX_COLS = 40
 ATTACHMENT_MAX_ROWS = 18
-# Cell height / cell width. Increase to make images wider, decrease
-# to make them taller (counter-intuitive: this is the multiplier
-# we use to translate source aspect into cell aspect).
-CELL_ASPECT = 2.8
-# Max pixel dim for the on-disk thumbnail. Big enough that Kitty
-# doesn't have to upscale when rendering at MAX_COLS×MAX_ROWS cells.
+CELL_ASPECT = 2.8   # cell height / cell width fallback
 ATTACHMENT_THUMB_PX = 768
-# HTTP timeout for synchronous attachment downloads.
 ATTACHMENT_TIMEOUT_S = 4
-# Pixel size to request for emoji from the CDN.
 EMOJI_SIZE_PX = 48
-# Pixel size to ask Discord for. Anything >= cell-pixels * dimensions works.
 PFP_SIZE_PX = 64
-# Kitty image IDs are 32-bit. Start at a high offset so we don't clash
-# with anything else that might be using the protocol (e.g. notifications).
-KITTY_ID_BASE = 0x70667000   # "pfp\0"
+KITTY_ID_BASE = 0x70667000   # "pfp\0" — high offset to avoid notification IDs etc.
 
 
 def kitty_supported():
-    """Heuristic: is the current terminal Kitty-compatible?
-
-    Checks $TERM and a couple of common env vars. We don't query the
-    terminal here because that requires read-back on stdin which we
-    can't safely do while curses owns it.
-    """
+    """Heuristic check via env vars — no stdin read-back (curses owns it)."""
     term = os.environ.get("TERM", "")
     if "kitty" in term:
         return True
     if os.environ.get("TERM_PROGRAM") == "kitty":
         return True
-    # Ghostty also implements the protocol.
     if os.environ.get("TERM_PROGRAM") == "ghostty":
         return True
     if os.environ.get("KITTY_WINDOW_ID"):
@@ -159,8 +133,7 @@ def _apply_circular_mask(im):
     mask = mask.resize((w, h), Image.LANCZOS)
     out = im.copy()
     if "A" in out.getbands():
-        # Intersect the existing alpha with the circle so an avatar
-        # that's already partially transparent keeps its holes.
+        # Intersect existing alpha with circle — preserves transparent holes.
         from PIL import ImageChops
         out.putalpha(ImageChops.multiply(out.getchannel("A"), mask))
     else:
@@ -169,11 +142,7 @@ def _apply_circular_mask(im):
 
 
 def _chunk_payload(data, controls):
-    """Build the Kitty protocol APC sequence(s).
-
-    Long payloads are split into chunks of 4096 base64 chars with m=1
-    on all but the last chunk.
-    """
+    """Build Kitty APC sequence(s), chunked at 4096 base64 chars with m=1."""
     b64 = base64.standard_b64encode(data)
     chunks = []
     chunk_size = 4096
@@ -199,31 +168,17 @@ class PfpRenderer:
         self.discord = discord
         self.cache_path = cache_path
         self.enabled = enabled and HAVE_PIL and kitty_supported()
-        # avatar_id -> kitty image id (already transmitted)
-        self._transmitted = {}
-        # avatar_id -> True while a background download is in flight
+        self._transmitted = {}   # avatar_id -> kitty image id
         self._fetching = set()
-        # next free Kitty image id
         self._next_id = KITTY_ID_BASE
-        # image ids that have at least one placement currently on screen.
-        # We delete by image id (kills all placements for that image)
-        # so we don't need to track individual placement ids.
         self._placed = set()
-        # Monotonic placement-id counter — every place() gets a unique
-        # placement_id so two avatars from the same author don't collide.
         self._next_placement_id = 1
         self._lock = threading.Lock()
-        # Auto-tune (cols, rows) to render a visually square avatar at
-        # the terminal's actual cell pixel aspect. Falls back to the
-        # hardcoded 5×2 if the terminal doesn't report pixel dims.
         detected = detect_cell_aspect()
         self.cell_aspect = detected or CELL_ASPECT
         self.pfp_cols, self.pfp_rows = best_square(2, self.cell_aspect)
         self.emoji_cols, self.emoji_rows = best_square(1, self.cell_aspect)
-        # url -> (source_width_px, source_height_px), populated by
-        # measure_attachment. Used for source-region crops when an image
-        # is only partially on-screen.
-        self._attach_px = {}
+        self._attach_px = {}   # url -> (sw, sh) for source crops
         logger.info(
             f"pfp cell_aspect={self.cell_aspect:.3f} "
             f"(detected={detected is not None}) "
@@ -241,17 +196,12 @@ class PfpRenderer:
             return kid
 
     def _avatar_path(self, user_id, avatar_id):
-        """Return a local path to a square 64px PNG of the avatar.
-
-        Downloads + converts if needed. Returns None on failure.
-        """
-        # `pfp_round_` prefix busts the pre-round cache; old pfp_<id>.png
-        # files become harmless leftovers.
+        """Return path to cached 64px PNG. Downloads+converts on miss."""
+        # `pfp_round_` prefix busts pre-round cache.
         png_name = f"pfp_round_{avatar_id}.png"
         png_path = os.path.join(os.path.expanduser(self.cache_path), png_name)
         if os.path.isfile(png_path):
             return png_path
-        # Pull the webp via endcord's existing helper, then convert.
         webp_path = self.discord.get_pfp(
             user_id, avatar_id, size=PFP_SIZE_PX, save_path=self.cache_path,
         )
@@ -278,9 +228,6 @@ class PfpRenderer:
             return self._transmitted[avatar_id]
         if avatar_id in self._fetching:
             return None
-        # Fetch synchronously here — caller is the draw thread; the cache
-        # hit path is fast and the cold path happens at most once per user.
-        # Background-thread this if it becomes a bottleneck.
         self._fetching.add(avatar_id)
         try:
             path = self._avatar_path(user_id, avatar_id)
@@ -289,8 +236,6 @@ class PfpRenderer:
             kid = self._alloc_id(avatar_id)
             with open(path, "rb") as f:
                 data = f.read()
-            # a=t: transmit only. f=100: PNG (auto-detect). i: image id.
-            # q=2: suppress all responses. C=1: don't move cursor.
             ctrl = f"a=t,f=100,i={kid},q=2"
             _send(_chunk_payload(data, ctrl))
             return kid
@@ -434,12 +379,8 @@ class PfpRenderer:
             return None
         if sw <= 0 or sh <= 0:
             return None
-        # Cell aspect = cell_h / cell_w. For a cell area c×r to display
-        # an image with source aspect sw:sh undistorted:
-        #   (c * cell_w) / (r * cell_h) = sw / sh
-        #   c / r = (sw / sh) * cell_aspect
+        # c/r = (sw/sh) * cell_aspect for undistorted display.
         ratio = (sw / sh) * cell_aspect
-        # Fit within (max_cols, max_rows) preserving ratio.
         if ratio >= max_cols / max_rows:
             cols = max_cols
             rows = max(1, round(cols / ratio))
@@ -476,17 +417,7 @@ class PfpRenderer:
 
     def place_attachment(self, url, row, col, cols=ATTACHMENT_MAX_COLS, rows=ATTACHMENT_MAX_ROWS,
                          crop_top_cells=0, full_rows=None):
-        """Place an attachment thumbnail at (row, col).
-
-        If `crop_top_cells > 0`, render only the bottom slice of the image
-        (the top `crop_top_cells × cell_h` source pixels are skipped). The
-        slice is displayed in `rows` cells starting at `row`, so callers
-        should pass the visible-only row count as `rows` and the image's
-        full row count as `full_rows`. Used when the image header is
-        off-screen above the chat region but its reserved row band is
-        still visible — without it, the reserve cells show as empty
-        whitespace at the top of the chat.
-        """
+        """Place attachment thumbnail at (row, col). crop_top_cells>0 = render bottom slice only."""
         if not self.enabled or not url:
             return
         kid = self._ensure_attachment_transmitted(url)
@@ -498,8 +429,6 @@ class PfpRenderer:
         cup = f"\x1b[{row + 1};{col + 1}H".encode("ascii")
         if crop_top_cells > 0 and full_rows and url in self._attach_px:
             sw, sh = self._attach_px[url]
-            # Crop the top of the source image proportionally. Y/h are in
-            # source pixels; r is the cell count we're rendering into.
             y_off = max(0, min(sh - 1, int(crop_top_cells * sh / full_rows)))
             h_src = max(1, sh - y_off)
             controls = (
