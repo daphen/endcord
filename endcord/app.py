@@ -1215,6 +1215,18 @@ class Endcord:
         if self.config["remember_state"] and self.current_channel.get("type") not in (11, 12, 15, 16):
             self.state["last_guild_id"] = guild_id
             self.state["last_channel_id"] = channel_id
+        # Resync tabbed_channels from the current channel_cache so we
+        # don't silently lose tabs if something modifies the pinned
+        # set without going through toggle_tab. toggle_tab is supposed
+        # to be the only path, but reports of "tabs are forgotten"
+        # across restarts suggest there's a desync path we haven't
+        # tracked down. Belt-and-suspenders: always save what's
+        # actually pinned in the cache right now.
+        if self.config["remember_tabs"]:
+            pinned_now = [c[0] for c in self.channel_cache if c[2]]
+            if self.active_channel.get("pinned") and self.active_channel["channel_id"] not in pinned_now:
+                pinned_now.append(self.active_channel["channel_id"])
+            self.state["tabbed_channels"] = pinned_now
         utils.save_json(self.state, f"state_{self.profiles["selected"]}.json")
 
         self.remove_running_task("Switching channel", 1)
