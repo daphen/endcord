@@ -834,10 +834,10 @@ class Endcord:
                 "afk": False,
                 "client_state": "OFFLINE",
             }
-        # clear messages from cached channels
+        # clear messages from cached channels, drop unpinned entries
         for num in range(len(self.channel_cache) - 1, -1, -1):
             if self.channel_cache[num][2]:
-                self.channel_cache[num][2] = []
+                self.channel_cache[num][1] = []
             else:
                 self.channel_cache.pop(num)
         self.gateway.set_channel_cache(self.channel_cache)
