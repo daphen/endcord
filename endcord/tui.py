@@ -652,6 +652,12 @@ class TUI():
         chat_offset = outer_offset
         # ≥1 col prompt pad so cursor lands after input border `│`, not on it.
         prompt_pad = max(len(self.prompt), 1)
+        # Too-small terminal: the window dims below go negative, and
+        # derwin() with a negative size raises curses.error → crash on
+        # resize. Bail; the next resize (on enlarge) redraws cleanly.
+        member_cols = (self.member_list_width + 1) if self.member_list else 0
+        if w < max(chat_offset, inner_offset + prompt_pad) + 2 + member_cols or h < 5 + self.have_title:
+            return
         chat_hwyx = (
             h - 4 - self.have_title,
             w - chat_offset - 1 - bool(self.member_list),
